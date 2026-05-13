@@ -1,228 +1,472 @@
-# Day 20 & 21 — HTL / Sightly
-**Difficulty:** Medium–Hard | **4 YOE Focus**
+# Day 20–21 — HTL / Sightly (Complete Guide)
+**Target:** 2–4 YOE | **Versions:** AEM 6.5 & Cloud Service
 
 ---
 
-## 📖 Topic Explanation
+## 🌟 What is HTL?
 
-HTL (HTML Template Language), formerly called Sightly, is AEM's server-side templating language. It's **logic-less HTML-first** — business logic belongs in Sling Models, HTL only handles rendering.
+**HTL (HTML Template Language)**, formerly called **Sightly**, is AEM's server-side templating language. It replaced JSP as the recommended way to render AEM components starting with AEM 6.0.
 
-### Key Principles
-- HTML-valid syntax: `data-sly-*` attributes
-- Context-aware XSS protection by default
-- No scriptlets — all logic in Sling Models
+### Why HTL Over JSP?
+
+| Concern | JSP | HTL |
+|---------|-----|-----|
+| **XSS Security** | Manual escaping required — easy to forget | **Auto-escaping by context** — secure by default |
+| **Separation of concerns** | Java scriptlets mixed with HTML | Zero Java in templates — logic in Sling Models |
+| **Testability** | Hard to test templates | Sling Models are pure Java — unit-testable |
+| **Designer-friendly** | Java knowledge needed | Pure HTML-like syntax |
+| **Expression language** | JSP EL | HTL Expression Language (simpler) |
+
+### HTL File Location
+```
+/apps/mysite/components/content/hero/
+  ├── hero.html           ← Main HTL file (named after component folder)
+  ├── title.html          ← Can be included or used as script for selector
+  └── _cq_dialog/
+```
 
 ---
 
-## 📋 All data-sly-* Statements
+## 💡 HTL Syntax Fundamentals
 
-### 1. `data-sly-use` — Instantiate a Sling Model
+HTL expressions and block statements are HTML-valid attributes — HTL files open correctly in any HTML editor.
+
 ```html
-<!-- Adapt from Java class -->
+<!-- HTL Expression: outputs a value -->
+${properties.title}
+
+<!-- HTL Block Statement: a data-sly-* attribute on any HTML element -->
+<p data-sly-test="${properties.title}">${properties.title}</p>
+
+<!-- The <sly> tag: a virtual element that renders its content but NOT the tag itself -->
+<!-- Use it when you need a block statement without an actual HTML element -->
 <sly data-sly-use.model="com.mysite.core.models.HeroModel"/>
-
-<!-- Adapt from HTL template file -->
-<sly data-sly-use.template="templates/common.html"/>
-
-<!-- Adapt with options passed to model -->
-<sly data-sly-use.model="${'com.mysite.models.MyModel' @ itemId=itemId}"/>
 ```
 
-### 2. `data-sly-test` — Conditional Rendering
+---
+
+## 📋 All HTL Block Statements
+
+### `data-sly-use` — Instantiate a Sling Model or Use-API class
+
 ```html
-<!-- Show element only if condition is true -->
-<div data-sly-test="${model.title}">
-    <h1>${model.title}</h1>
+<!-- Instantiate a Sling Model -->
+<sly data-sly-use.model="com.mysite.core.models.HeroModel"/>
+<!-- Now use: ${model.title}, ${model.subtitle}, etc. -->
+
+<!-- Instantiate a WCM Use-API (legacy) -->
+<sly data-sly-use.page="com.day.cq.wcm.api.Page"/>
+
+<!-- Instantiate another HTL file as a template class -->
+<sly data-sly-use.templates="shared/templates.html"/>
+
+<!-- Multiple use declarations -->
+<sly data-sly-use.model="com.mysite.core.models.HeroModel"
+     data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"/>
+
+<!-- Pass parameters to the model (available via bindings in Use-class) -->
+<sly data-sly-use.navModel="${'com.mysite.core.models.NavModel' @ maxDepth=3, rootPath='/content/mysite'}"/>
+```
+
+---
+
+### `data-sly-test` — Conditional Rendering
+
+```html
+<!-- Renders element ONLY if expression is truthy -->
+<h1 data-sly-test="${model.title}">${model.title}</h1>
+
+<!-- Falsy values: false, 0, '', null, undefined, empty collections -->
+<!-- Truthy values: non-empty strings, non-zero numbers, non-empty collections -->
+
+<!-- Negation: use ! for NOT -->
+<div data-sly-test="${!model.hasContent}" class="placeholder">
+    No content configured. Please edit this component.
 </div>
 
-<!-- Negate with ! -->
-<p data-sly-test="${!model.isEmpty}">Content goes here</p>
+<!-- Save result to variable for reuse (avoids calling getter multiple times) -->
+<div data-sly-test.hasContent="${model.hasContent}">
+    <!-- ${hasContent} is available here as the boolean result -->
+    <span>Content available: ${hasContent}</span>
+</div>
 
-<!-- Store result in variable for reuse -->
-<div data-sly-test.hasTitle="${model.title}">
-    <h1 data-sly-test="${hasTitle}">${model.title}</h1>
-    <span data-sly-test="${!hasTitle}">No title</span>
+<!-- Complex condition (prefer to put complex logic in Sling Model!) -->
+<div data-sly-test="${model.isAdmin && model.featureEnabled}">
+    Admin feature
 </div>
 ```
 
-### 3. `data-sly-list` — Iterate Collections
+---
+
+### `data-sly-list` — Iterate Over Collections
+
 ```html
-<!-- Basic iteration -->
+<!-- Basic iteration: item is the current element, itemList is the list -->
 <ul>
-    <li data-sly-list="${model.items}">${item.label}</li>
+    <li data-sly-list="${model.items}">${item}</li>
 </ul>
 
-<!-- Named iterator + index -->
+<!-- Custom variable name (recommended for clarity) -->
 <ul>
-    <li data-sly-list.navItem="${model.navItems}">
-        <span>${navItemList.index}: ${navItem.title}</span>
-        <!-- navItemList provides: index, count, first, last, odd, even -->
+    <li data-sly-list.product="${model.products}">
+        <h3>${product.name}</h3>
+        <span>${product.price}</span>
+        <a href="${product.link @ context='uri'}">View</a>
     </li>
 </ul>
+
+<!-- Loop status variable: itemName + 'List' -->
+<ul>
+    <li data-sly-list.card="${model.cards}">
+        <!-- cardList.count = total, cardList.index = 0-based, cardList.first, cardList.last -->
+        <span class="count">${cardList.index + 1} / ${cardList.count}</span>
+        <h3 class="${cardList.first ? 'first-card' : ''}">${card.title}</h3>
+    </li>
+</ul>
+
+<!-- Status variables for a list named "product" → productList -->
+<!-- productList.index    = current index (0-based) -->
+<!-- productList.count    = total items -->
+<!-- productList.first    = true if first item -->
+<!-- productList.last     = true if last item -->
+<!-- productList.odd      = true on odd indexes (1, 3, 5...) -->
+<!-- productList.even     = true on even indexes (0, 2, 4...) -->
+<!-- productList.middle   = true if not first and not last -->
 ```
 
-### 4. `data-sly-repeat` — Like list but on the element itself
+---
+
+### `data-sly-repeat` — Repeat Element Itself (not wrap in container)
+
 ```html
-<!-- Repeat the element for each item (no wrapper needed) -->
-<div class="card" data-sly-repeat="${model.cards}">
-    <h3>${item.title}</h3>
-    <p>${item.description}</p>
-</div>
+<!-- data-sly-list wraps children inside the element
+     data-sly-repeat repeats the element itself -->
+
+<!-- data-sly-list: ONE <ul>, MULTIPLE <li> -->
+<ul>
+    <li data-sly-list.item="${model.items}">${item}</li>
+</ul>
+<!-- Result: <ul><li>A</li><li>B</li></ul> -->
+
+<!-- data-sly-repeat: MULTIPLE <tr> elements -->
+<tr data-sly-repeat.row="${model.tableRows}">
+    <td>${row.col1}</td>
+    <td>${row.col2}</td>
+</tr>
+<!-- Result: <tr><td>...</td></tr><tr><td>...</td></tr> -->
 ```
 
-### 5. `data-sly-resource` — Include a Child Resource
+---
+
+### `data-sly-include` — Include Another HTL File
+
 ```html
-<!-- Include a child resource with its own component rendering -->
-<div data-sly-resource="${'header' @ resourceType='mysite/components/header'}"/>
+<!-- Include another script from the SAME component -->
+<sly data-sly-include="head-includes.html"/>
 
-<!-- Include existing child node -->
-<div data-sly-resource="${'footer'}"/>
+<!-- Include from another path -->
+<sly data-sly-include="/apps/mysite/components/shared/breadcrumb.html"/>
 
-<!-- With wrapper element replaced -->
-<sly data-sly-resource="${'navigation'}"/>
+<!-- Include with unwrap (strip the <sly> tag) -->
+<sly data-sly-include="body.html" data-sly-unwrap/>
 ```
 
-### 6. `data-sly-include` — Include Another HTL Script
+---
+
+### `data-sly-resource` — Include a JCR Resource
+
 ```html
-<!-- Include another HTL file (shares same context) -->
-<sly data-sly-include="footer.html"/>
-<sly data-sly-include="/apps/mysite/components/common/tracking.html"/>
+<!-- Include another AEM resource and render it using ITS own component -->
+<sly data-sly-resource="/content/mysite/shared/header"/>
+
+<!-- Include with specific resource type override -->
+<sly data-sly-resource="${'hero' @ resourceType='mysite/components/content/hero'}"/>
+
+<!-- Include child node of current resource -->
+<sly data-sly-resource="heroImage"/>
+
+<!-- Include with append/prepend path -->
+<sly data-sly-resource="${@ path='myPath', resourceType='mysite/components/content/text'}"/>
 ```
 
-### 7. `data-sly-call` — Call a Template Block
+---
+
+### `data-sly-template` and `data-sly-call` — Reusable HTL Templates
+
 ```html
-<!-- Define a template -->
-<template data-sly-template.card="${@ title, description, link}">
+<!-- DEFINE a template (function definition) -->
+<template data-sly-template.card="${@ title, imageUrl, link}">
     <div class="card">
-        <h3>${title}</h3>
-        <p>${description}</p>
-        <a href="${link}">Read More</a>
+        <img src="${imageUrl @ context='uri'}" alt="${title}"/>
+        <h3><a href="${link @ context='uri'}">${title}</a></h3>
     </div>
 </template>
 
-<!-- Call the template -->
-<sly data-sly-list="${model.items}">
-    <sly data-sly-call="${card @ title=item.title, description=item.desc, link=item.url}"/>
-</sly>
-```
+<!-- CALL the template with parameters -->
+<sly data-sly-call="${card @ title=product.name, imageUrl=product.imageUrl, link=product.link}"/>
 
-### 8. `data-sly-attribute` — Dynamic Attributes
-```html
-<!-- Single attribute -->
-<a data-sly-attribute.href="${model.link}">Click</a>
-
-<!-- Conditional attribute -->
-<a data-sly-attribute.target="${model.isExternal ? '_blank' : null}">Link</a>
-
-<!-- Multiple attributes from map -->
-<div data-sly-attribute="${model.attributeMap}">...</div>
-```
-
-### 9. `data-sly-element` — Dynamic Tag Name
-```html
-<!-- Change tag name dynamically -->
-<h1 data-sly-element="${model.headingLevel}">${model.title}</h1>
-<!-- Renders as <h1>, <h2>, <h3> etc. based on model -->
-```
-
-### 10. `data-sly-unwrap` — Remove Wrapper Element
-```html
-<!-- The div itself is removed, only inner content renders -->
-<div data-sly-unwrap="${model.noWrapper}">
-    <p>Content</p>
-</div>
+<!-- Templates in separate files -->
+<!-- shared-templates.html: define templates -->
+<!-- hero.html: -->
+<sly data-sly-use.templates="shared-templates.html"/>
+<sly data-sly-call="${templates.card @ title='Hello', imageUrl='/dam/img.jpg', link='/home.html'}"/>
 ```
 
 ---
 
-## 🔒 Context-Aware Escaping
-
-HTL automatically applies XSS escaping based on context:
+### `data-sly-element` — Dynamic HTML Tag Name
 
 ```html
-<!-- Default: HTML entity escaping -->
-${model.title}                           → HTML context
+<!-- Dynamically set the HTML element type -->
+<div data-sly-element="${model.headingLevel}">${model.title}</div>
+<!-- If model.headingLevel = "h2" → <h2>...</h2> -->
+<!-- If model.headingLevel = "p"  → <p>...</p> -->
 
-<!-- Explicit contexts -->
-${model.link @ context='uri'}            → URL encoding
-${model.jsVar @ context='scriptString'} → JS string escaping
-${model.style @ context='styleToken'}   → CSS escaping
-${model.html @ context='html'}          → Raw HTML (unsafe - use carefully)
-${model.attr @ context='attribute'}     → HTML attribute escaping
-${model.text @ context='text'}          → Text context (same as default)
-
-<!-- Disable escaping (ONLY for trusted, sanitized HTML) -->
-${model.richText @ context='unsafe'}
+<!-- Use case: Title component where policy controls H1-H6 level -->
+<sly data-sly-use.model="com.mysite.core.models.TitleModel"/>
+<div class="title" data-sly-element="${model.element}">${model.title}</div>
 ```
 
 ---
 
-## 🔗 Include vs Resource vs Call
+### `data-sly-attribute` — Dynamic Attributes
 
-| Statement | Use Case | Shares context? |
-|-----------|---------|----------------|
-| `data-sly-include` | Include another HTL script | ✅ Yes |
-| `data-sly-resource` | Include a separate JCR resource with its own component | ❌ No |
-| `data-sly-call` | Call a template block defined in same/included file | ✅ Yes |
-
----
-
-## ❓ Interview Questions & Answers
-
-**Q1. How do you call a Sling Model in HTL?**
-> `<sly data-sly-use.model="com.mysite.core.models.MyModel"/>`
-> Then access: `${model.propertyName}`. HTL adapts the current resource or request to the model based on the model's `adaptables`.
-
-**Q2. What is the difference between `data-sly-include` and `data-sly-resource`?**
-> - `data-sly-include`: Includes another HTL script in the SAME context/request. The included script has access to the same variables and resource.
-> - `data-sly-resource`: Renders a SEPARATE JCR resource with ITS OWN component rendering. Creates a sub-request. The child resource can be a different component type.
-
-**Q3. How does HTL handle XSS protection?**
-> HTL automatically applies context-aware escaping. By default, all expressions `${...}` are HTML-escaped. Use `@ context='uri'` for URLs, `@ context='scriptString'` in JS, etc. This prevents most XSS vulnerabilities without developer effort. `context='unsafe'` disables escaping — use only for sanitized HTML.
-
-**Q4. What is `data-sly-list` iterator variable?**
-> When using `data-sly-list.item="${collection}"`, HTL provides a `itemList` object with:
-> - `itemList.index`: 0-based index
-> - `itemList.count`: 1-based count
-> - `itemList.first`: true for first item
-> - `itemList.last`: true for last item
-> - `itemList.odd` / `itemList.even`: for alternating styles
-
-**Q5. How do you conditionally add an HTML attribute?**
 ```html
-<!-- Set to null to omit the attribute entirely -->
-<a data-sly-attribute.target="${model.openInNewTab ? '_blank' : null}"
-   href="${model.link @ context='uri'}">
-    Click Here
+<!-- Set a single attribute dynamically -->
+<a href="${model.link @ context='uri'}"
+   target="${model.openInNewTab ? '_blank' : '_self' @ context='attribute'}">
+   Click here
+</a>
+
+<!-- Set multiple attributes at once using a map -->
+<div data-sly-attribute="${model.attributes}">Content</div>
+<!-- model.attributes returns Map<String, String> {"class": "hero--dark", "data-id": "123"} -->
+
+<!-- Remove an attribute by setting its value to null or empty -->
+<a href="${model.link}"
+   rel="${model.isExternal ? 'noopener noreferrer' : null @ context='attribute'}">
 </a>
 ```
 
-**Q6. What is `<sly>` tag?**
-> `<sly>` is HTL's "invisible" element — it's used when you need a data-sly-* statement but don't want any HTML element in the output. The `<sly>` tag and its `data-sly-*` attributes are removed from output; only the inner content (or effect) remains.
+---
 
-**Q7. How do you create reusable HTL snippets?**
-> Use `data-sly-template` to define a template block, then `data-sly-call` to invoke it with parameters:
+### `data-sly-unwrap` — Strip the Wrapper Element
+
 ```html
-<template data-sly-template.button="${@ label, link, style}">
-  <a href="${link @ context='uri'}" class="btn btn-${style @ context='attribute'}">${label}</a>
-</template>
-<sly data-sly-call="${button @ label='Click Me', link='/page.html', style='primary'}"/>
+<!-- Renders children but strips the element itself -->
+<div data-sly-unwrap>
+    <p>This paragraph renders without the div wrapper</p>
+</div>
+<!-- Output: <p>This paragraph renders without the div wrapper</p> -->
+
+<!-- Common use: conditional wrapper that should be skipped -->
+<a href="${model.link}" data-sly-unwrap="${!model.hasLink}">
+    <span>${model.label}</span>
+</a>
+<!-- If hasLink=true: <a href="..."><span>...</span></a> -->
+<!-- If hasLink=false: <span>...</span> (no <a> wrapper) -->
 ```
+
+---
+
+### `data-sly-text` — Set Text Content
+
+```html
+<!-- Set text content (escapes HTML by default) -->
+<h1 data-sly-text="${model.title}"></h1>
+<!-- Equivalent to: <h1>${model.title}</h1> -->
+
+<!-- But data-sly-text takes precedence over child content -->
+<h1 data-sly-text="${model.title}">Placeholder text (ignored if model.title is set)</h1>
+```
+
+---
+
+## 🔒 HTL Context Escaping — Critical Security Concept
+
+HTL **automatically escapes output** based on where it's used. The escape mode is determined by context.
+
+```html
+<!-- CONTEXT AUTO-DETECTION -->
+<div>${model.title}</div>
+<!-- Context: HTML → auto HTML-escapes: <script> becomes &lt;script&gt; -->
+
+<a href="${model.link}">Link</a>
+<!-- Context: URI → auto URI-escapes: spaces become %20 -->
+
+<p class="${model.cssClass}">...</p>
+<!-- Context: HTML attribute → auto HTML-attribute-escapes -->
+```
+
+### Explicit Context Override
+
+```html
+<!-- HTML context (default) — HTML entity encoding -->
+<div>${model.text}</div>
+
+<!-- URI context — URL encoding -->
+<a href="${model.url @ context='uri'}">Link</a>
+
+<!-- HTML attribute — HTML attribute safe encoding -->
+<div class="${model.cssClass @ context='attribute'}">
+
+<!-- RAW HTML — NO ESCAPING (use only for trusted rich text!) -->
+<div>${model.richText @ context='html'}</div>
+<!-- ⚠️ DANGEROUS: only use for content from AEM's RTE — never for user input -->
+
+<!-- Script context (inside <script> tags) — JS string escaping -->
+<script>var title = "${model.title @ context='scriptString'}";</script>
+
+<!-- Style context (inside <style> tags) -->
+<style>.${model.className @ context='styleToken'} { color: red; }</style>
+
+<!-- Unsafe (disables ALL escaping — NEVER use) -->
+<div>${model.html @ context='unsafe'}</div>
+<!-- ❌ XSS RISK — never use this -->
+```
+
+### Context Summary Table
+
+| Context | Used For | Example |
+|---------|---------|---------|
+| `html` (default) | HTML body content | `<p>${text}</p>` |
+| `attribute` | HTML attributes | `class="${cls @ context='attribute'}"` |
+| `uri` | href, src, action | `href="${link @ context='uri'}"` |
+| `scriptString` | JS string values | `var x = "${val @ context='scriptString'}"` |
+| `styleToken` | CSS class/property | `.${cls @ context='styleToken'}` |
+| `text` | Explicit text node | Same as default |
+| `html` (explicit) | Trusted HTML (RTE) | `${richText @ context='html'}` |
+| `unsafe` | ❌ Never use | Disables all escaping |
+
+---
+
+## 💻 Real-World HTL Example — Complete Card Component
+
+```html
+<!-- /apps/mysite/components/content/card/card.html -->
+
+<sly data-sly-use.model="com.mysite.core.models.CardModel"
+     data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"/>
+
+<!-- Load component CSS -->
+<sly data-sly-call="${clientlib.css @ categories='mysite.component.card'}"/>
+
+<!-- Only render if model has content -->
+<article class="card card--${model.variant @ context='attribute'}"
+         data-sly-test="${model.hasContent}"
+         id="${model.id @ context='attribute'}">
+
+    <!-- Card image: only show if image path is present -->
+    <div class="card__image" data-sly-test="${model.imageUrl}">
+        <img src="${model.imageUrl @ context='uri'}"
+             alt="${model.imageAlt}"
+             loading="lazy"/>
+    </div>
+
+    <!-- Card body -->
+    <div class="card__body">
+
+        <!-- Tag/category label -->
+        <span class="card__tag" data-sly-test="${model.tag}">
+            ${model.tag}
+        </span>
+
+        <!-- Title (H3 by default, configurable via policy) -->
+        <div class="card__title" data-sly-element="${model.headingElement}">
+            ${model.title}
+        </div>
+
+        <!-- Description: rich text from RTE -->
+        <div class="card__description"
+             data-sly-test="${model.description}">
+            ${model.description @ context='html'}
+        </div>
+
+        <!-- CTA Links -->
+        <div class="card__actions"
+             data-sly-test="${model.primaryCtaLink && model.primaryCtaLabel}">
+
+            <a href="${model.primaryCtaLink @ context='uri'}"
+               class="btn btn--primary"
+               target="${model.primaryCtaNewTab ? '_blank' : '_self' @ context='attribute'}"
+               rel="${model.primaryCtaNewTab ? 'noopener noreferrer' : '' @ context='attribute'}">
+                ${model.primaryCtaLabel}
+            </a>
+
+            <!-- Secondary CTA: only if both link and label present -->
+            <a href="${model.secondaryCtaLink @ context='uri'}"
+               class="btn btn--secondary"
+               data-sly-test="${model.secondaryCtaLink && model.secondaryCtaLabel}">
+                ${model.secondaryCtaLabel}
+            </a>
+        </div>
+
+    </div>
+
+</article>
+
+<!-- Author placeholder when no content configured -->
+<div class="card card--empty"
+     data-sly-test="${!model.hasContent}">
+    <p>Configure this Card component using the edit dialog.</p>
+</div>
+
+<!-- Component JS -->
+<sly data-sly-call="${clientlib.js @ categories='mysite.component.card'}"/>
+```
+
+---
+
+## ❓ Interview Questions & Detailed Answers
+
+**Q1. What is HTL and why was it introduced?**
+
+> **Answer:** HTL (HTML Template Language) is AEM's secure server-side templating language that replaced JSP. It was introduced because JSP allowed dangerous practices: Java scriptlets in templates (poor separation of concerns), easy-to-forget manual XSS escaping, and tight coupling between logic and presentation. HTL has no Java in templates (logic belongs in Sling Models), automatic context-aware XSS escaping (secure by default), and an HTML-valid syntax that works in standard HTML editors.
+
+**Q2. What is context-aware escaping in HTL?**
+
+> **Answer:** HTL automatically determines the escaping mode based on where an expression is used in HTML. In the body (`<p>${text}</p>`), it applies HTML entity encoding (`<` → `&lt;`). In attributes (`href="${url}"`), it applies URI encoding. In JavaScript strings (`"${val @ context='scriptString'}"`), it applies JS escaping. This prevents XSS by default — you can't accidentally output malicious scripts. You must explicitly opt into `context='html'` for trusted rich text and `context='unsafe'` (never) to disable escaping.
+
+**Q3. What is `data-sly-use` and when would you use it?**
+
+> **Answer:** `data-sly-use` instantiates a Sling Model, WCM Use-API class, or another HTL file and binds it to a local variable. It's the bridge between the Java logic layer and the template. You use it whenever you need data from a Sling Model: `data-sly-use.model="com.mysite.core.models.HeroModel"` then access `${model.title}`.
+
+**Q4. What is the `<sly>` element and why use it?**
+
+> **Answer:** `<sly>` is an HTL virtual element that renders its contents but produces NO output element itself. Use it when you need a block statement (like `data-sly-use`, `data-sly-test`, `data-sly-include`) but don't want an actual HTML wrapper. For example, `<sly data-sly-use.model="..."/>` instantiates the model without adding any HTML to the page output.
+
+**Q5. What is `data-sly-unwrap` used for?**
+
+> **Answer:** `data-sly-unwrap` strips the element it's placed on, rendering only its children. It's useful for conditional wrapper elements — e.g., wrap content in `<a>` only if there's a link, otherwise just render the content. `<a href="${link}" data-sly-unwrap="${!hasLink}">content</a>` → if `hasLink=false`, renders just `content` without the `<a>` tag.
+
+**Q6. What is the difference between `data-sly-list` and `data-sly-repeat`?**
+
+> **Answer:** `data-sly-list` iterates over a collection and renders the CONTENTS of the element for each item (the element itself renders once as the container). `data-sly-repeat` repeats the ELEMENT ITSELF for each item. For example, in a `<ul>`, use `data-sly-list` on `<li>` (one `<ul>`, many `<li>`). For table rows, use `data-sly-repeat` on `<tr>` to repeat the row element itself.
 
 ---
 
 ## ✅ Best Practices
 
-- Never put business logic in HTL — all logic in Sling Models
-- Always use the correct `context` for escaping (especially `context='uri'` for links)
-- Use `<sly>` instead of wrapper `<div>` for structural statements
-- Define reusable snippets with `data-sly-template` + `data-sly-call`
-- Use `data-sly-test` for conditional rendering — never inline ternaries for complex logic
-- Avoid `context='unsafe'` — if needed, ensure content is properly sanitized
+1. **Never use `context='unsafe'`** — it disables all XSS protection
+2. **Use `context='html'` sparingly** — only for content from AEM's RTE
+3. **Always use `context='uri'`** for hrefs and src attributes
+4. **Keep HTL dumb** — no complex logic in templates; all business logic in Sling Models
+5. **Use `<sly>` for block statements** without HTML output
+6. **Use `data-sly-test`** to hide empty components instead of rendering empty wrappers
+7. **Name `data-sly-list` variables descriptively** (`data-sly-list.product` not just `data-sly-list`)
+8. **Use `data-sly-template` for reusable markup patterns** within a component
 
 ---
 
-## 🛠️ Hands-on Tasks
+## 🛠️ Hands-on Practice
 
-**Day 20**: Build an HTL template that renders a product list using `data-sly-list` with first/last styling
-**Day 21**: Create a reusable card template using `data-sly-template` + `data-sly-call`, include it from multiple components
+**Day 20:**
+1. Create an HTL template using all block statements: `use`, `test`, `list`, `include`
+2. Build a simple card that shows different content based on `model.variant`
+3. Experiment with `data-sly-element` to render H2 or H3 based on a model property
+
+**Day 21:**
+1. Implement a `data-sly-template` for a reusable badge component
+2. Create a shared HTL file with `data-sly-template` definitions and call it from multiple components
+3. Deliberately inject HTML-unsafe content and verify HTL auto-escapes it
+4. Test `context='html'` with RTE output — verify it renders correctly

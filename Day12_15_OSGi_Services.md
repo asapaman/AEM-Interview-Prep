@@ -1,126 +1,343 @@
-# Day 12, 13, 14, 15 — OSGi & Services
-**Difficulty:** Hard | **4 YOE Focus**
+# Day 12–15 — OSGi & Services (Complete Guide)
+**Target:** 2–4 YOE | **Versions:** AEM 6.5 & Cloud Service
 
 ---
 
-## 📖 Topic Explanation
+## 🌟 What is OSGi? (Start Here)
 
-OSGi (Open Services Gateway initiative) is the module system underlying AEM. It manages the lifecycle of Java bundles (JARs with special metadata) and the registration/lookup of services.
+**OSGi (Open Services Gateway initiative)** is a Java framework for building **modular applications**. In AEM, all Java code is deployed as OSGi **bundles** (special JAR files), and services communicate via OSGi's **service registry**.
 
-### OSGi Concepts
-| Concept | Description |
-|---------|------------|
-| **Bundle** | JAR file with OSGi manifest. Unit of deployment. |
-| **Component** | Java class managed by OSGi (annotated with `@Component`) |
-| **Service** | Interface registered in OSGi service registry |
-| **Reference** | A dependency on another service (`@Reference`) |
-| **Activate/Deactivate** | Lifecycle callbacks |
+### Why OSGi in AEM?
+- **Hot deployment:** Install, update, or remove bundles WITHOUT restarting the entire AEM JVM
+- **Modular:** Each bundle is independent with its own classpath
+- **Service registry:** Bundles can register services and discover/consume each other's services
+- **Configuration:** Externalize configuration via OSGi Config Manager without code changes
+
+### OSGi = Bundle + Component + Service
+
+| Concept | Description | Java Analog |
+|---------|------------|-------------|
+| **Bundle** | JAR file with OSGi metadata (MANIFEST.MF specifying imports/exports) | Maven module |
+| **Component** | Java class managed by OSGi (`@Component`) | Spring Bean |
+| **Service** | Component registered in service registry under an interface | Spring Service |
+| **Reference** | A dependency on another service | `@Autowired` in Spring |
 
 ---
 
-## 🏷️ Core OSGi Annotations
+## 🏗️ Complete OSGi Service Example
 
+Let's build a complete, production-ready OSGi service from scratch:
+
+### Step 1: Define the Interface
+```java
+package com.mysite.core.services;
+
+import java.util.List;
+
+/**
+ * Service for fetching product data from an external API.
+ *
+ * Why define an interface?
+ * 1. Code to interface → easier to mock in unit tests
+ * 2. Multiple implementations possible (prod API, mock, cache-only)
+ * 3. Decoupled from implementation details
+ */
+public interface ProductService {
+
+    /**
+     * Fetches a single product by ID.
+     * @param productId The product identifier
+     * @return Product data, or null if not found
+     */
+    Product getProduct(String productId);
+
+    /**
+     * Fetches products in a category.
+     * @param categoryId The category identifier
+     * @return List of products (empty list if none found, never null)
+     */
+    List<Product> getProductsByCategory(String categoryId);
+
+    /**
+     * Checks if the service is healthy/available.
+     */
+    boolean isHealthy();
+}
+```
+
+### Step 2: Create the Configuration Interface
 ```java
 package com.mysite.core.services.impl;
 
+import org.osgi.service.metatype.annotations.AttributeDefinition;
+import org.osgi.service.metatype.annotations.ObjectClassDefinition;
+
+/**
+ * @ObjectClassDefinition = Makes this config appear in OSGi Config Manager UI
+ * Factory configs use factoryPid instead of pid
+ */
+@ObjectClassDefinition(
+    name = "My Site - Product Service Configuration",
+    description = "Configuration for the external Product API integration"
+)
+public @interface ProductServiceConfig {
+
+    @AttributeDefinition(
+        name = "API Base URL",
+        description = "Base URL of the product API (e.g., https://api.mysite.com/v1)"
+    )
+    String apiBaseUrl() default "https://api.mysite.com/v1";
+
+    @AttributeDefinition(
+        name = "API Key",
+        description = "Authentication key for the API"
+    )
+    String apiKey() default "";
+
+    @AttributeDefinition(
+        name = "Cache TTL (seconds)",
+        description = "How long to cache API responses. Set to 0 to disable caching."
+    )
+    int cacheTtlSeconds() default 300;  // 5 minutes
+
+    @AttributeDefinition(
+        name = "Connection Timeout (ms)",
+        description = "HTTP connection timeout in milliseconds"
+    )
+    int connectionTimeoutMs() default 5000;
+
+    @AttributeDefinition(
+        name = "Service Enabled",
+        description = "Enable/disable this service without undeploying"
+    )
+    boolean enabled() default true;
+}
+```
+
+### Step 3: Implement the Service
+```java
+package com.mysite.core.services.impl;
+
+import com.mysite.core.services.ProductService;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
 import org.osgi.service.component.annotations.*;
 import org.osgi.service.metatype.annotations.Designate;
-import org.osgi.service.metatype.annotations.ObjectClassDefinition;
-import org.osgi.service.metatype.annotations.AttributeDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-// @ObjectClassDefinition defines configurable properties (OSGi Config)
-@ObjectClassDefinition(name = "My Custom Service Config")
-@interface MyServiceConfig {
-    @AttributeDefinition(name = "API Endpoint", description = "URL of the external API")
-    String apiEndpoint() default "https://api.example.com";
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
-    @AttributeDefinition(name = "Cache TTL (seconds)")
-    int cacheTtl() default 300;
+/**
+ * @Component — Marks this class as an OSGi-managed component
+ *   service = ProductService.class → Registers in service registry under this interface
+ *   immediate = true → Activate immediately when bundle starts (not lazily)
+ *
+ * @Designate — Links this component to its config class
+ */
+@Component(
+    service = ProductService.class,
+    immediate = true
+)
+@Designate(ocd = ProductServiceConfig.class)
+public class ProductServiceImpl implements ProductService {
 
-    @AttributeDefinition(name = "Enabled")
-    boolean enabled() default true;
-}
+    private static final Logger LOG = LoggerFactory.getLogger(ProductServiceImpl.class);
 
-// @Component marks this as an OSGi-managed component
-// @Service registers it in the OSGi service registry under the interface
-@Component(service = MyCustomService.class, immediate = true)
-@Designate(ocd = MyServiceConfig.class)
-public class MyCustomServiceImpl implements MyCustomService {
-
-    private static final Logger LOG = LoggerFactory.getLogger(MyCustomServiceImpl.class);
-
-    private String apiEndpoint;
-    private int cacheTtl;
+    // Config values (populated in @Activate)
+    private String apiBaseUrl;
+    private String apiKey;
+    private int cacheTtlSeconds;
     private boolean enabled;
 
-    // @Activate runs when the component is activated (bundle starts or config changes)
+    // Simple in-memory cache
+    private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
+
+    /**
+     * @Activate — Called when the OSGi component starts (bundle activation or config change)
+     *
+     * This method is called:
+     * 1. When the bundle first starts
+     * 2. After @Modified (config update)
+     * NOT called on every request — only once at startup!
+     */
     @Activate
-    protected void activate(MyServiceConfig config) {
-        this.apiEndpoint = config.apiEndpoint();
-        this.cacheTtl = config.cacheTtl();
+    protected void activate(ProductServiceConfig config) {
+        this.apiBaseUrl = config.apiBaseUrl();
+        this.apiKey = config.apiKey();
+        this.cacheTtlSeconds = config.cacheTtlSeconds();
         this.enabled = config.enabled();
-        LOG.info("MyCustomService activated. Endpoint: {}", apiEndpoint);
+
+        LOG.info("ProductService activated. URL: {}, Cache TTL: {}s, Enabled: {}",
+            apiBaseUrl, cacheTtlSeconds, enabled);
+
+        // Clear cache on config change
+        cache.clear();
     }
 
-    // @Modified runs when OSGi config is updated (without full deactivate/activate)
+    /**
+     * @Modified — Called when OSGi config changes WITHOUT restarting the component
+     *
+     * Use case: An admin updates the API URL in Felix Console Config Manager
+     * → @Modified fires, component reloads config WITHOUT a full restart
+     */
     @Modified
-    protected void modified(MyServiceConfig config) {
-        activate(config);  // Re-use activate logic
+    protected void modified(ProductServiceConfig config) {
+        LOG.info("ProductService config modified — reloading");
+        activate(config);  // Re-use activate logic (common pattern)
     }
 
-    // @Deactivate runs when bundle/component is stopped
+    /**
+     * @Deactivate — Called when the component/bundle is stopped
+     *
+     * CRITICAL: Release all resources here!
+     * - Close HTTP clients
+     * - Unregister listeners
+     * - Clear caches
+     * - Stop background threads
+     *
+     * Failing to do this = MEMORY LEAKS
+     */
     @Deactivate
     protected void deactivate() {
-        LOG.info("MyCustomService deactivated");
+        LOG.info("ProductService deactivated — clearing resources");
+        cache.clear();
+        // Close any persistent connections or thread pools here
     }
 
     @Override
-    public String fetchData(String id) {
-        if (!enabled) return null;
-        // Business logic using apiEndpoint
-        return apiEndpoint + "/data/" + id;
+    public Product getProduct(String productId) {
+        if (!enabled || productId == null) return null;
+
+        // Check cache first
+        String cacheKey = "product:" + productId;
+        Product cached = getFromCache(cacheKey);
+        if (cached != null) {
+            LOG.debug("Cache HIT for product: {}", productId);
+            return cached;
+        }
+
+        LOG.debug("Cache MISS for product: {} — fetching from API", productId);
+
+        try {
+            String url = apiBaseUrl + "/products/" + productId;
+            Product product = callApi(url, Product.class);
+            if (product != null) {
+                putInCache(cacheKey, product);
+            }
+            return product;
+        } catch (Exception e) {
+            LOG.error("Failed to fetch product: {}", productId, e);
+            return null;
+        }
+    }
+
+    @Override
+    public List<Product> getProductsByCategory(String categoryId) {
+        if (!enabled || categoryId == null) return Collections.emptyList();
+
+        String cacheKey = "category:" + categoryId;
+        List<Product> cached = getFromCache(cacheKey);
+        if (cached != null) return cached;
+
+        try {
+            String url = apiBaseUrl + "/categories/" + categoryId + "/products";
+            List<Product> products = callApiList(url);
+            putInCache(cacheKey, products);
+            return products;
+        } catch (Exception e) {
+            LOG.error("Failed to fetch products for category: {}", categoryId, e);
+            return Collections.emptyList();  // Return empty, not null!
+        }
+    }
+
+    @Override
+    public boolean isHealthy() {
+        return enabled && apiBaseUrl != null && !apiBaseUrl.isEmpty();
+    }
+
+    // ── Private helpers ──
+
+    private <T> T getFromCache(String key) {
+        CacheEntry entry = cache.get(key);
+        if (entry != null && !entry.isExpired(cacheTtlSeconds)) {
+            return (T) entry.getValue();
+        }
+        return null;
+    }
+
+    private void putInCache(String key, Object value) {
+        if (cacheTtlSeconds > 0) {
+            cache.put(key, new CacheEntry(value));
+        }
+    }
+
+    private <T> T callApi(String url, Class<T> type) throws Exception {
+        // HTTP call implementation
+        // Use Apache HttpClient, OkHttp, or AEM's HttpClientBuilderFactory
+        return null; // Simplified
+    }
+
+    private List<Product> callApiList(String url) throws Exception {
+        return Collections.emptyList(); // Simplified
+    }
+
+    // ── Inner classes ──
+
+    private static class CacheEntry {
+        private final Object value;
+        private final long timestamp;
+
+        CacheEntry(Object value) {
+            this.value = value;
+            this.timestamp = System.currentTimeMillis();
+        }
+
+        boolean isExpired(int ttlSeconds) {
+            return (System.currentTimeMillis() - timestamp) > (ttlSeconds * 1000L);
+        }
+
+        Object getValue() { return value; }
     }
 }
 ```
 
 ---
 
-## 🔗 Service Interface
+## 🔗 Referencing Services (@Reference)
 
+### In Another OSGi Service
 ```java
-// Always define a separate interface!
-public interface MyCustomService {
-    String fetchData(String id);
-    List<Product> getProducts(String category);
-}
-```
+@Component(service = OrderService.class)
+public class OrderServiceImpl implements OrderService {
 
----
-
-## 📥 Referencing Services
-
-### In another OSGi Service
-```java
-@Component(service = AnotherService.class)
-public class AnotherServiceImpl implements AnotherService {
-
-    // @Reference injects another registered OSGi service
+    // Mandatory reference — OrderService WON'T activate if ProductService unavailable
     @Reference
-    private MyCustomService myCustomService;
+    private ProductService productService;
 
-    // Optional reference (won't fail if service unavailable)
+    // Optional reference — OrderService activates even if service unavailable
     @Reference(cardinality = ReferenceCardinality.OPTIONAL)
-    private OptionalService optionalService;
+    private NotificationService notificationService;
 
-    // Multiple services (all implementations)
-    @Reference(cardinality = ReferenceCardinality.MULTIPLE,
-               policy = ReferencePolicy.DYNAMIC)
-    private volatile List<SomeService> someServices;
+    // Multiple references — gets ALL registered implementations
+    @Reference(
+        cardinality = ReferenceCardinality.MULTIPLE,
+        policy = ReferencePolicy.DYNAMIC,
+        policyOption = ReferencePolicyOption.GREEDY
+    )
+    private volatile List<PaymentGateway> paymentGateways;
 
-    public void doWork() {
-        String data = myCustomService.fetchData("123");
+    public void processOrder(Order order) {
+        // Use ProductService (always available due to mandatory reference)
+        Product product = productService.getProduct(order.getProductId());
+
+        // Null-check optional services
+        if (notificationService != null) {
+            notificationService.sendConfirmation(order.getEmail());
+        }
     }
 }
 ```
@@ -128,109 +345,253 @@ public class AnotherServiceImpl implements AnotherService {
 ### In a Sling Model
 ```java
 @Model(adaptables = Resource.class, defaultInjectionStrategy = DefaultInjectionStrategy.OPTIONAL)
-public class MyComponentModel {
+public class ProductListModel {
 
     @OSGiService
-    private MyCustomService myCustomService;
+    private ProductService productService;
+
+    @ValueMapValue
+    private String categoryId;
+
+    private List<Product> products;
 
     @PostConstruct
     protected void init() {
-        String result = myCustomService.fetchData("product-123");
+        if (productService != null && categoryId != null) {
+            products = productService.getProductsByCategory(categoryId);
+        } else {
+            products = Collections.emptyList();
+        }
+    }
+
+    public List<Product> getProducts() { return products; }
+}
+```
+
+---
+
+## ⚙️ OSGi Configuration Files
+
+### AEM 6.5 Configuration Storage
+```
+ui.config/src/main/content/jcr_root/
+  apps/mysite/config/                          ← All environments
+    com.mysite.core.services.impl.ProductServiceImpl.cfg.json
+
+  apps/mysite/config.author/                  ← Author only
+    com.mysite.core.services.impl.ProductServiceImpl.cfg.json
+
+  apps/mysite/config.publish/                 ← Publish only
+    com.mysite.core.services.impl.ProductServiceImpl.cfg.json
+
+  apps/mysite/config.author.prod/             ← Author + Production
+    com.mysite.core.services.impl.ProductServiceImpl.cfg.json
+```
+
+### Configuration File Format (.cfg.json — AEM 6.5.5+ and Cloud)
+```json
+{
+    "apiBaseUrl": "https://api.mysite.com/v1",
+    "apiKey": "$[secret:PRODUCT_API_KEY]",
+    "cacheTtlSeconds": 300,
+    "connectionTimeoutMs": 5000,
+    "enabled": true
+}
+```
+
+> 🔑 In AEM Cloud Service, use `$[secret:ENV_VAR_NAME]` syntax for sensitive values. The actual value is configured in Cloud Manager as an environment variable — it's never stored in the code repository.
+
+### Environment Variables in AEM Cloud
+```json
+{
+    "apiBaseUrl": "$[env:PRODUCT_API_BASE_URL;default=https://api.mysite.com/v1]",
+    "apiKey": "$[secret:PRODUCT_API_KEY]"
+}
+```
+
+---
+
+## 🔄 OSGi Component Lifecycle
+
+```
+Bundle Installed
+    ↓
+Bundle Resolved (dependencies satisfied)
+    ↓
+Bundle Starting
+    ↓
+Components Activated (@Activate called)
+    ↓
+[Running — handling requests, processing data]
+    ↓
+Config Updated → @Modified called → Component keeps running
+    ↓
+Bundle Stopping
+    ↓
+Components Deactivated (@Deactivate called) ← RELEASE RESOURCES HERE
+    ↓
+Bundle Uninstalled
+```
+
+---
+
+## ⚡ @Reference vs @OSGiService
+
+| | `@Reference` (in OSGi Component) | `@OSGiService` (in Sling Model) |
+|--|---|---|
+| **Used in** | OSGi `@Component` classes | Sling Model classes |
+| **Timing** | Injected at component activation | Injected at model instantiation |
+| **Optional** | `cardinality = OPTIONAL` | `injectionStrategy = OPTIONAL` |
+| **Multiple** | `cardinality = MULTIPLE` | Not directly supported |
+
+---
+
+## 🚨 Common OSGi Mistakes & Fixes
+
+### Mistake 1: Storing ResourceResolver as Field
+```java
+// ❌ WRONG — ResourceResolver is request-scoped, NOT service-scoped
+@Component(service = DataService.class)
+public class DataServiceImpl implements DataService {
+
+    @Reference
+    private ResourceResolverFactory resolverFactory;
+
+    // NEVER do this — creates memory leaks and stale references
+    private ResourceResolver sharedResolver;
+
+    @Activate
+    protected void activate() {
+        // DON'T create resolver here and store it as field!
+        sharedResolver = resolverFactory.getServiceResourceResolver(...);
+    }
+}
+
+// ✅ CORRECT — Get and close resolver in each method
+public class DataServiceImpl implements DataService {
+
+    @Reference
+    private ResourceResolverFactory resolverFactory;
+
+    public String readData(String path) {
+        Map<String, Object> params = Map.of(SUBSERVICE, "data-reader");
+        try (ResourceResolver resolver = resolverFactory.getServiceResourceResolver(params)) {
+            Resource resource = resolver.getResource(path);
+            return resource != null ? resource.getValueMap().get("data", String.class) : null;
+        } catch (LoginException e) {
+            LOG.error("Cannot get ResourceResolver", e);
+            return null;
+        }
+    }
+}
+```
+
+### Mistake 2: Not Handling Missing @Reference Service
+```java
+// ❌ WRONG — Component won't start if PaymentService unavailable
+@Reference
+private PaymentService paymentService;  // Mandatory by default
+
+// ✅ CORRECT — Make optional if not critical
+@Reference(cardinality = ReferenceCardinality.OPTIONAL)
+private PaymentService paymentService;
+
+// Then always null-check:
+public void processPayment(Order order) {
+    if (paymentService == null) {
+        LOG.warn("PaymentService not available — skipping payment processing");
+        return;
+    }
+    paymentService.charge(order);
+}
+```
+
+### Mistake 3: Not Unregistering in @Deactivate
+```java
+// ❌ WRONG — Event listener never unregistered = memory leak
+@Component
+public class ContentEventHandler {
+    @Reference
+    private EventAdmin eventAdmin;
+
+    private EventHandler handler;
+
+    @Activate
+    protected void activate() {
+        handler = event -> LOG.info("Event received: {}", event.getTopic());
+        // Registered but never unregistered!
+    }
+
+    // ✅ CORRECT
+    @Deactivate
+    protected void deactivate() {
+        if (handler != null) {
+            // Unregister listener, cancel timers, close connections
+        }
     }
 }
 ```
 
 ---
 
-## 🔑 OSGi Service vs OSGi Component
+## ❓ Interview Questions & Detailed Answers
 
-| | OSGi Component | OSGi Service |
-|--|---------------|-------------|
-| Annotation | `@Component` | `@Component(service=...)` |
-| Registered? | Managed but NOT in service registry | Registered in service registry |
-| Injectable? | ❌ Cannot be `@Reference`d | ✅ Can be `@Reference`d |
-| Use case | Listeners, Schedulers | Shared business logic |
+**Q1. What is the difference between an OSGi Component and an OSGi Service?**
 
----
+> **Answer:** An **OSGi Component** is any Java class annotated with `@Component` and managed by the OSGi framework (lifecycle: activate/deactivate). An **OSGi Service** is a Component that ALSO registers itself in the OSGi Service Registry under a specific interface: `@Component(service = MyInterface.class)`. Services can be injected into other components via `@Reference`. All Services are Components, but not all Components are Services (e.g., an event listener might be a Component but not register as a Service).
 
-## 📝 OSGi Configuration (OSGI Config Files)
+**Q2. When is `@Activate` called? What should you do there?**
 
-OSGi configs are stored as JSON/XML in the code repo and deployed as part of the package:
+> **Answer:** `@Activate` is called when the OSGi bundle/component starts — once at startup (or after a config change if `@Modified` is not defined). Use it to: read OSGi configuration values (`config.apiUrl()`), initialize connections, set up caches, register event listeners. Do NOT: perform JCR operations (no ResourceResolver at this point), or do heavy work that should be per-request.
 
-```
-ui.config/src/main/content/jcr_root/apps/mysite/osgiconfig/
-  ├── config/                                        ← All environments
-  │     └── com.mysite.core.services.impl.MyCustomServiceImpl.cfg.json
-  ├── config.author/                                 ← Author-only
-  │     └── com.mysite.core.services.impl.MyCustomServiceImpl.cfg.json
-  └── config.publish/                                ← Publish-only
-        └── com.mysite.core.services.impl.MyCustomServiceImpl.cfg.json
-```
+**Q3. What is `@Modified` and when would you use it?**
 
-```json
-{
-  "apiEndpoint": "https://api.production.com",
-  "cacheTtl": 600,
-  "enabled": true
-}
-```
+> **Answer:** `@Modified` is called when the component's OSGi configuration changes (via Felix Console or OSGi config files) WITHOUT fully deactivating and reactivating the component. Use it when you want to reload configuration dynamically without a service restart. The common pattern is to call `activate(config)` from `@Modified` since they both need to process the new config.
 
----
+**Q4. What is `@Deactivate` and why is it critical?**
 
-## ❓ Interview Questions & Answers
+> **Answer:** `@Deactivate` is called when the bundle/component is stopping. It's **critical** for resource cleanup: close HTTP clients, cancel scheduled tasks, clear caches, unregister listeners. Failing to release resources in `@Deactivate` causes memory leaks that accumulate over time and crash the JVM.
 
-**Q1. List and explain commonly used OSGi annotations.**
-> - `@Component`: Marks class as OSGi-managed. Handles lifecycle.
-> - `@Activate`: Called when component starts. Read config here.
-> - `@Deactivate`: Called when component stops. Release resources.
-> - `@Modified`: Called when OSGi config changes (without restart).
-> - `@Reference`: Injects another OSGi service.
-> - `@Designate`: Links component to a configuration class (`@ObjectClassDefinition`).
+**Q5. What is `@Reference` and how does it work with `cardinality`?**
 
-**Q2. What is the difference between an OSGi Service and an OSGi Component?**
-> A **Component** is any `@Component` class managed by OSGi. A **Service** is a Component that also registers itself in the OSGi Service Registry (`service=MyInterface.class`), making it injectable via `@Reference` or `@OSGiService`. All Services are Components, but not all Components are Services.
+> **Answer:** `@Reference` injects another registered OSGi service. `cardinality` controls what happens if the service is unavailable:
+> - `MANDATORY` (default): Component won't activate without it
+> - `OPTIONAL`: Component activates even if service is null
+> - `AT_LEAST_ONE`: Requires at least one implementation
+> - `MULTIPLE`: Gets all registered implementations as a `List`
 
-**Q3. How do you call one OSGi service from another?**
-> Use `@Reference` annotation:
-```java
-@Reference
-private SomeService someService;
-```
-> OSGi's dependency injection automatically injects the registered implementation. If multiple implementations exist, use `target` filter or ranking.
+**Q6. How do you make an OSGi service configurable per environment (dev/stage/prod)?**
 
-**Q4. How do you make an OSGi service configurable per environment?**
-> Use `@ObjectClassDefinition` + `@Designate` for the config class. Store JSON config files in run-mode folders (`config.author/`, `config.publish/`, `config.prod/`). OSGi Config Manager applies the appropriate config based on active run modes.
+> **Answer:** Use `@ObjectClassDefinition` for the config interface and `@Designate(ocd = MyConfig.class)` on the component. Store config JSON files in run-mode-specific folders: `config/` (all), `config.author/`, `config.publish/`, `config.prod/`. The OSGi framework applies the most specific matching config at startup. In AEM Cloud, use `$[env:VAR_NAME]` and `$[secret:VAR_NAME]` references in config files, with actual values set in Cloud Manager.
 
-**Q5. What happens if an `@Reference`d service is unavailable?**
-> By default (`cardinality = MANDATORY`), the component WON'T activate if the referenced service is unavailable. Use `cardinality = ReferenceCardinality.OPTIONAL` if the dependency is optional.
+**Q7. Why should OSGi services code to interfaces, not implementations?**
 
-**Q6. What is `immediate = true` in `@Component`?**
-> By default, OSGi activates a component lazily (when first requested). `immediate = true` forces activation immediately when the bundle starts. Use for components that need to register listeners at startup (e.g., event handlers, schedulers).
-
-**Q7. How do you avoid memory leaks in OSGi services?**
-> - Close all `ResourceResolver` instances in `finally` blocks
-> - Unregister listeners in `@Deactivate`
-> - For schedulers, cancel the scheduled job in `@Deactivate`
-> - Use `volatile` for dynamically referenced service lists
-> - Never store request-scoped objects in service fields
+> **Answer:** Three reasons:
+> 1. **Testability:** In unit tests, mock the interface without the real implementation (no API calls, no JCR access)
+> 2. **Multiple implementations:** Different implementations for prod (real API) vs dev (mock data) vs test (cached)
+> 3. **OSGi best practice:** Register and reference services by interface — the service registry is interface-based
 
 ---
 
 ## ✅ Best Practices
 
-- Always code to **interfaces** — keep impl in separate class
-- Use `@Modified` to reload config without restarting bundle
-- Use run-mode specific config folders (`config.author`, `config.publish`, `config.prod`)
-- Close `ResourceResolver` in `finally` block or use try-with-resources
-- Use `LoggerFactory.getLogger(ClassName.class)` — always include class for context
-- Register services under their **interface**, not implementation class
-- Use `@Reference(cardinality = OPTIONAL)` for non-critical dependencies
+1. **Always code to interfaces** — register `service = MyInterface.class`, not the Impl class
+2. **Use `@Modified`** to reload config without component restart (avoid unnecessary downtime)
+3. **Always cleanup** in `@Deactivate` — close connections, cancel timers, clear caches
+4. **Use environment-specific config folders** (`config.author`, `config.publish`, `config.prod`)
+5. **Never store `ResourceResolver` as a service field** — always get-and-close per-operation
+6. **Use `ReferenceCardinality.OPTIONAL`** for non-critical services
+7. **Log at appropriate levels**: DEBUG for operational data, INFO for lifecycle events, WARN for non-critical issues, ERROR for failures
+8. **In AEM Cloud**: Use `$[secret:VAR]` for API keys — never hardcode credentials
 
 ---
 
-## 🛠️ Hands-on Tasks
+## 🛠️ Hands-on Practice
 
-**Day 12**: Create `LoggingService` with `@Activate`, `@Deactivate`, `@Modified`
-**Day 13**: Create `ProductService` interface + `ProductServiceImpl` with configurable API URL
-**Day 14**: Inject `ProductService` into a Sling Model using `@OSGiService`
-**Day 15**: Create `ReportService` that `@Reference`s both `ProductService` and `UserService`
+**Day 12**: Create `LoggingService` with `@Activate`, `@Modified`, `@Deactivate`. Log config values at each lifecycle event.
+
+**Day 13**: Create `ContentApiService` interface + `ContentApiServiceImpl` with configurable base URL, API key, timeout. Store config in `config.author/` and `config.publish/` with different URLs.
+
+**Day 14**: Inject `ContentApiService` into a Sling Model using `@OSGiService`. Call it in `@PostConstruct`, handle null gracefully.
+
+**Day 15**: Create `ReportingService` that `@Reference`s both `ContentApiService` and `UserService`. Make `UserService` reference `OPTIONAL`.

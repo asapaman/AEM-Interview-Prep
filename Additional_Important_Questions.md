@@ -1,343 +1,564 @@
-# Additional Important Questions — Must Know for 4 YOE Interview
-**Focus: Senior-Level Deep Dives**
+# Additional Important Questions — Senior-Level Deep Dives
+**Target:** 2–4 YOE | AEM 6.5 & Cloud Service
 
 ---
 
-## Q1. Difference Between Static and Editable Templates
+## Q1. Static Templates vs Editable Templates (Complete Comparison)
+
+### What Are Static Templates? (Legacy — AEM 5.x to 6.1)
+
+Static templates were defined entirely by developers in `/apps/<site>/templates/`. Authors had NO control over template structure. Component restrictions required "design mode" (a separate authoring mode).
+
+```
+/apps/mysite/templates/
+  └── homepage/
+        ├── .content.xml    ← Template definition
+        └── thumbnail.png
+```
+
+```xml
+<!-- Static Template .content.xml -->
+<jcr:root
+    jcr:primaryType="cq:Template"
+    jcr:title="Homepage"
+    ranking="{Long}100"
+    allowedPaths="[/content/mysite(/.*)?,/content/mysite]"
+    allowedParents="[/apps/mysite/templates/.*]"
+    allowedChildren="[/apps/mysite/templates/.*]">
+  <jcr:content
+      jcr:primaryType="cq:PageContent"
+      sling:resourceType="mysite/components/page/homepage">
+    <!-- Fixed structure — authors CANNOT change this -->
+    <header sling:resourceType="mysite/components/structure/header"/>
+    <main sling:resourceType="foundation/components/parsys"/>
+    <footer sling:resourceType="mysite/components/structure/footer"/>
+  </jcr:content>
+</jcr:root>
+```
+
+### What Are Editable Templates? (Modern — AEM 6.2+)
+
+Editable Templates are managed in `/conf/<site>/settings/wcm/templates/`. Template authors (NOT developers) can create and modify templates in the AEM UI.
+
+```
+/conf/mysite/settings/wcm/templates/
+  └── homepage/
+        ├── jcr:content/         ← Template metadata
+        ├── structure/           ← LOCKED content (header, footer)
+        ├── initial/             ← Default content for new pages
+        └── policies/            ← Policy assignments
+```
+
+### Side-by-Side Comparison
 
 | Aspect | Static Templates | Editable Templates |
 |--------|-----------------|-------------------|
-| **Location** | `/apps/<site>/templates/` | `/conf/<site>/settings/wcm/templates/` |
-| **Managed by** | Developers only | Template authors (+ developers) |
-| **Component restrictions** | Design dialogs + design mode | Content Policies |
-| **Structure locking** | Not supported | Structure layer (locked components) |
-| **Initial content** | Not supported | Initial layer |
-| **Style System** | ❌ | ✅ |
-| **Best Practice** | ❌ Legacy | ✅ Modern standard |
+| **Location** | `/apps/mysite/templates/` | `/conf/mysite/settings/wcm/templates/` |
+| **Who creates** | Developers only | Template authors (AEM UI) |
+| **Component control** | Design mode (Classic UI) | Content Policies |
+| **Locked structure** | ❌ Not possible | ✅ Structure layer |
+| **Initial content** | ❌ Not possible | ✅ Initial layer |
+| **Style System** | ❌ Not supported | ✅ Supported |
+| **AEM Cloud** | ⚠️ Partially supported | ✅ Required |
+| **Best practice** | ❌ Legacy only | ✅ Always use |
 
-**When asked:** Always say you use Editable Templates in modern projects. Static templates are legacy.
+### Three Layers of Editable Templates
+
+```
+┌─────────────────────────────────────────────┐
+│                  STRUCTURE                   │  ← Developer/Template Author
+│  [Header - LOCKED]   [Footer - LOCKED]       │     Authors CANNOT edit this
+└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│               INITIAL CONTENT                │  ← Copied to page at creation
+│  [Default Hero Text]   [Default CTA]         │     Authors CAN edit afterward
+└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│                  POLICIES                    │  ← Template Author
+│  Main Zone: [Text, Image, Video allowed]     │     Defines allowed components
+│  Sidebar: [Text, Form allowed]               │
+└─────────────────────────────────────────────┘
+```
 
 ---
 
-## Q2. How Does Dispatcher Caching Work?
+## Q2. How Dispatcher Caching Works — Deep Dive
 
-### Dispatcher Cache Flow
+### What Dispatcher Caches
+
+The Dispatcher caches **static HTML files** on the server's filesystem. When a request comes in:
+
 ```
-Request → Dispatcher checks /var/cache/<site>/<path>.html
-  → Cache HIT → Serve cached file directly
-  → Cache MISS → Forward to AEM Publish → Get response → Store in cache → Return
+Request: GET /content/mysite/en/home.html
+
+Dispatcher checks: /var/cache/mysite/content/mysite/en/home.html
+                                    ↑
+                                    (mirrors the URL path)
+
+→ File EXISTS and is valid → Serve directly (no AEM involved!)
+→ File MISSING or invalidated → Forward to AEM Publish
 ```
 
-### Cache Invalidation
-When content is activated on Author:
-1. Replication agent sends **activation** signal to Publish
-2. Publish sends **cache invalidation** request to Dispatcher
-3. Dispatcher marks affected pages as "stale" (deletes `.stat` files)
-4. Next request for those pages goes through to Publish and re-caches
+### File-Based Cache Structure
+```
+/var/cache/                                 ← Dispatcher document root
+  └── content/
+        └── mysite/
+              └── en/
+                    ├── home.html           ← Cached page
+                    ├── home.html.stat      ← Timestamp file
+                    ├── about.html
+                    └── products/
+                          └── laptop.html
+```
 
-### Dispatcher Configuration (Key Files)
+### Cache Invalidation Flow (Critical to Know!)
+
+```
+1. Editor clicks "Publish" on Author
+        ↓
+2. Author's Replication Agent sends content to Publish
+        ↓
+3. Publish instance receives content AND sends cache invalidation
+   signal to Dispatcher (via /dispatcher/invalidate.cache endpoint)
+        ↓
+4. Dispatcher finds all files in cache that match the invalidation path
+        ↓
+5. Dispatcher deletes .stat files (marks cache as stale)
+        ↓
+6. Next request for that page → Cache MISS → AEM re-renders → Cache updated
+```
+
+### Dispatcher Configuration Key Sections
+
 ```apache
-# dispatcher.any - Main config
-/cache {
-    /docroot "/var/cache"
-    /rules {
-        /0000 { /type "allow" /url "*" }
-        /0001 { /type "deny" /url "*.html" /glob "/content/private/*" }
+# /etc/httpd/conf.dispatcher.d/available_farms/default.farm
+
+/renders {
+    # AEM Publish instance(s)
+    /renderer0 {
+        /hostname "aem-publish.internal"
+        /port "4503"
+        /timeout "60000"
     }
+}
+
+/cache {
+    /docroot "/var/www/html"
+
+    /rules {
+        # Cache all .html pages
+        /0001 { /type "allow" /url "*.html" }
+        # Don't cache these
+        /0002 { /type "deny"  /url "/content/dam/*.html" }
+        /0003 { /type "deny"  /url "*.nocache.html" }
+    }
+
     /invalidate {
+        # Who can invalidate the cache?
         /0000 { /type "allow" /glob "*" }
     }
-    /headers {
-        "Cache-Control"
-        "Expires"
+
+    /allowedClients {
+        # Which IPs can send invalidation requests?
+        /0001 { /type "allow" /glob "10.0.0.*" }    # AEM Publish IP range
     }
+}
+
+/filter {
+    # Security: Block dangerous paths
+    /0001 { /type "deny"  /url "/system/*" }
+    /0002 { /type "deny"  /url "/crx/*" }
+    /0003 { /type "deny"  /url "/apps/*" }
+    /0004 { /type "deny"  /url "/libs/*" }
+    /0005 { /type "allow" /url "/libs/granite/csrf/token.json" }
+    # Allow public content
+    /0100 { /type "allow" /method "GET" /url "/content/mysite/*" }
+    /0101 { /type "allow" /url "/etc.clientlibs/*" }
 }
 ```
 
-### What Dispatcher Does NOT Cache (by default)
-- POST requests
-- Requests with query strings (unless configured)
-- Content under `/bin/`, `/apps/`, `/libs/` (security)
-- Responses without extension
-- Authenticated requests (by default)
+### What Dispatcher Does NOT Cache (By Default)
+
+| Not Cached | Reason |
+|-----------|--------|
+| POST requests | Not idempotent — each POST may have different effects |
+| Requests with query strings | e.g., `/page.html?campaign=summer` |
+| Authenticated requests | User-specific content shouldn't be shared |
+| Requests with cookies | Dynamic/personalized content |
+| Error responses (4xx, 5xx) | Don't cache failures |
+
+### Dispatcher Flush (Cache Clear)
+
+```
+Tools → Deployment → Replication → Agents on Author
+→ "Dispatcher Flush" agent
+→ Click "Test Connection" → should return 200
+→ Activate any page → watch flush log
+```
 
 ---
 
-## Q3. What Are AEM Run Modes?
+## Q3. AEM Run Modes — Complete Guide
 
-Run modes activate specific OSGi configurations based on environment:
+### What Are Run Modes?
+
+Run modes are **labels** applied to an AEM instance that activate specific OSGi configurations. They answer the question: "Which configs should be active for THIS instance?"
+
+### Setting Run Modes
+
+**Method 1: JVM System Property (most common)**
+```bash
+java -jar aem-quickstart.jar -Dsling.run.modes=publish,prod,us-east
+```
+
+**Method 2: Quickstart JAR naming (for development)**
+```bash
+# File named: aem-65-publish.jar
+# AEM reads "publish" as a run mode from the filename
+```
+
+**Method 3: sling.properties file**
+```properties
+# crx-quickstart/conf/sling.properties
+sling.run.modes=author,dev
+```
+
+**Method 4: AEM Cloud (set in Cloud Manager environment)**
+
+### Run Mode Config Resolution
 
 ```
--Dsling.run.modes=publish,prod
+Config locations checked (most specific to least specific):
+config.author.prod.us-east    ← Most specific (author + prod + us-east)
+config.author.prod             ← Author + production
+config.author                  ← Author only
+config.prod                    ← Production only
+config                         ← All instances (least specific)
 ```
 
-### OSGi Config Resolution Order (most specific wins)
-```
-config.author.prod → config.publish.prod → config.author → config.publish → config.prod → config
-```
+**Example:** Instance with run modes `author,prod,us-east` will use config from `config.author.prod.us-east/` if it exists, otherwise falls back down the chain.
 
-### Common Run Modes
-| Run Mode | Purpose |
-|----------|---------|
-| `author` | AEM Author instance |
-| `publish` | AEM Publish instance |
-| `dev` | Development environment |
-| `stage` | Staging environment |
-| `prod` | Production environment |
+### Checking Run Modes in Code
 
-### Checking Run Mode in Code
 ```java
 @Reference
 private SlingSettingsService slingSettings;
 
-public boolean isPublishMode() {
-    return slingSettings.getRunModes().contains("publish");
+public void checkEnvironment() {
+    Set<String> runModes = slingSettings.getRunModes();
+
+    boolean isAuthor = runModes.contains("author");
+    boolean isPublish = runModes.contains("publish");
+    boolean isProd = runModes.contains("prod");
+
+    LOG.info("Instance type: {}", isAuthor ? "AUTHOR" : "PUBLISH");
+
+    if (isProd) {
+        // Production-specific behavior
+    }
 }
 ```
 
----
-
-## Q4. Difference Between cq:dialog and cq:design_dialog
-
-| Aspect | `cq:dialog` | `cq:design_dialog` |
-|--------|------------|-------------------|
-| **Purpose** | Instance-level properties | Design/template-level properties |
-| **Who edits** | Content authors | Template authors (design mode) |
-| **Scope** | Per component instance | Shared across all instances |
-| **Modern equivalent** | `cq:dialog` (unchanged) | Content Policies (Editable Templates) |
-| **UI** | Touch UI dialog | Classic UI (mostly legacy) |
-
-**Key insight for interview:** `cq:design_dialog` is largely replaced by Content Policies in modern AEM. Mention this when asked.
+### Checking in HTL
+```html
+<sly data-sly-use.slingSettings="org.apache.sling.settings.SlingSettingsService"/>
+<!-- Show only on Author -->
+<div data-sly-test="${slingSettings.runModes contains 'author'}">
+    Author-only content
+</div>
+```
 
 ---
 
-## Q5. How Do You Debug Sling Models?
+## Q4. Dispatcher Caching — Request Path Patterns & Gotchas
 
-### Debugging Checklist
+### URL Patterns That Break Caching
+
 ```
-1. Check bundle status: /system/console/bundles
-   → Bundle must be "Active"
-
-2. Check model registration: /system/console/adapters
-   → Search for your class name
-
-3. Check compilation errors: /system/console/errors
-   → Look for your bundle name
-
-4. Enable DEBUG logging via Felix Console:
-   → /system/console/slinglog
-   → Add logger: org.apache.sling.models = DEBUG
-
-5. Use HTL debugging:
-   → <sly data-sly-test="${model == null}">MODEL IS NULL!</sly>
-
-6. Check @Model annotation:
-   → adaptables matches usage (Resource vs Request)
-   → resourceType matches component path
-
-7. AEM Dev Tools:
-   → /crx/de → navigate to content node, check properties
-   → Sling Servlet Resolver: /system/console/servletresolver
+# These patterns PREVENT Dispatcher caching:
+/content/page.html?param=value    ← Query string = not cached by default
+/content/page.nocache.html        ← .nocache selector convention
+/bin/mysite/api                   ← /bin/ paths (no extension)
 ```
 
-### Common Issues
-| Symptom | Likely Cause |
-|---------|-------------|
-| Model returns null | Wrong adaptable (Resource vs Request) |
-| Properties all null | Missing `DefaultInjectionStrategy.OPTIONAL` |
-| Class not found | Bundle not active, package not exported |
-| NPE in `@PostConstruct` | Null child resource not checked |
+### Enabling Query String Caching (with Caution)
 
----
-
-## Q6. What Is ResourceResolverFactory?
-
-`ResourceResolverFactory` is the OSGi service for obtaining `ResourceResolver` instances.
-
-```java
-@Reference
-private ResourceResolverFactory resolverFactory;
-
-// ✅ Correct: Service user (for schedulers, services, workflows)
-Map<String, Object> params = Collections.singletonMap(
-    ResourceResolverFactory.SUBSERVICE, "my-subservice"
-);
-try (ResourceResolver resolver = resolverFactory.getServiceResourceResolver(params)) {
-    // Use resolver
-}
-
-// ❌ NEVER USE: Admin resolver (deprecated, insecure)
-// resolverFactory.getAdministrativeResourceResolver(null);
-```
-
-### Always Close ResourceResolver!
-```java
-// Option 1: try-with-resources (preferred)
-try (ResourceResolver resolver = resolverFactory.getServiceResourceResolver(params)) {
-    Resource r = resolver.getResource("/content/mysite");
-} // Auto-closed
-
-// Option 2: explicit finally
-ResourceResolver resolver = null;
-try {
-    resolver = resolverFactory.getServiceResourceResolver(params);
-} finally {
-    if (resolver != null && resolver.isLive()) {
-        resolver.close();
+```apache
+# dispatcher.any — Allow specific query params to be cached
+/cache {
+    /ignoreUrlParams {
+        /0001 { /type "allow" /glob "utm_*" }   # Ignore UTM params
+        /0002 { /type "allow" /glob "debug" }    # Ignore debug param
+        # All other params: NOT ignored → cache miss for each unique combo
     }
 }
 ```
 
 ---
 
-## Q7. How Do You Avoid Memory Leaks in Schedulers?
+## Q5. How to Debug a Sling Model — Complete Checklist
 
-### 5 Rules to Avoid Memory Leaks
+```
+Symptom: Component not rendering / data is null
+
+STEP 1: Check if bundle is active
+→ /system/console/bundles
+→ Search your bundle name
+→ Status must be "Active"
+→ If "Installed" or "Resolved": click bundle → check Dependencies tab
+→ If "Installed": missing dependent bundle
+→ If "Resolved": component won't activate — check /system/console/components
+
+STEP 2: Check model registration
+→ /system/console/status-adapters.txt
+→ Ctrl+F your model class name
+→ If not found: @Model annotation missing, wrong package, or bundle not active
+
+STEP 3: Check OSGi components
+→ /system/console/components
+→ Search your model class
+→ Status must be "active"
+
+STEP 4: Enable debug logging
+→ /system/console/slinglog
+→ Add logger: com.mysite.core.models = DEBUG (or TRACE)
+→ Tail log: tail -f crx-quickstart/logs/error.log
+
+STEP 5: Check @Model adaptable
+→ If using data-sly-use in HTL, HTL adapts from REQUEST by default
+→ If @Model adaptables = Resource.class, but component is inside a request context...
+→ Solution: Use adaptables = {SlingHttpServletRequest.class, Resource.class}
+
+STEP 6: Check @ValueMapValue field names
+→ JCR property name must EXACTLY match field name (or use name="jcr:propertyName")
+→ e.g., dialog field name="./jcr:title" → Java field @ValueMapValue(name="jcr:title")
+
+STEP 7: Verify content in CRXDE
+→ Navigate to the component's JCR node
+→ Verify the dialog values are saved with the expected property names
+→ Compare with @ValueMapValue field names in Java
+
+STEP 8: Add debug output to HTL
+<sly data-sly-use.model="com.mysite.core.models.MyModel"/>
+Model is: ${model}
+Title: ${model.title}
+HasContent: ${model.hasContent}
+```
+
+---
+
+## Q6. What is ResourceResolverFactory? Complete Patterns
+
+```java
+/**
+ * ResourceResolverFactory is the central OSGi service for getting
+ * a ResourceResolver — the gateway to JCR content.
+ */
+
+// Pattern 1: Service User (for background services, schedulers)
+@Reference
+private ResourceResolverFactory resolverFactory;
+
+public void backgroundWork() {
+    Map<String, Object> params = Collections.singletonMap(
+        ResourceResolverFactory.SUBSERVICE, "my-subservice-name"
+    );
+    try (ResourceResolver resolver = resolverFactory.getServiceResourceResolver(params)) {
+        // READ
+        Resource page = resolver.getResource("/content/mysite/en/home");
+        if (page != null) {
+            String title = page.getChild("jcr:content")
+                              .getValueMap().get("jcr:title", String.class);
+        }
+
+        // WRITE — use ModifiableValueMap
+        Resource target = resolver.getResource("/content/mysite/data/submissions");
+        Resource newNode = resolver.create(target, "entry-001",
+            Map.of("jcr:primaryType", "nt:unstructured",
+                   "name", "John",
+                   "submittedAt", Calendar.getInstance()));
+
+        // COMMIT changes (nothing is saved until you commit!)
+        resolver.commit();
+
+    } catch (LoginException e) {
+        LOG.error("Service user '{}' failed to log in. Check ServiceUserMapper config.",
+            "my-subservice-name", e);
+    } catch (PersistenceException e) {
+        LOG.error("JCR write failed", e);
+    }
+}
+
+// Pattern 2: In a Servlet — use the request's resolver (user's own session)
+@Override
+protected void doGet(SlingHttpServletRequest request, SlingHttpServletResponse response) {
+    // request.getResourceResolver() is already the authenticated user's session
+    ResourceResolver resolver = request.getResourceResolver();  // DON'T close this one!
+    Resource page = resolver.getResource("/content/mysite/home");
+    // resolver is managed by Sling's request lifecycle — don't close it here
+}
+```
+
+---
+
+## Q7. Memory Leak Prevention — 5 Golden Rules
 
 ```java
 @Component(service = Runnable.class, immediate = true)
 public class SafeScheduler implements Runnable {
 
     @Reference
-    private ResourceResolverFactory resolverFactory;
-
-    @Reference
     private Scheduler scheduler;
 
-    private String jobName = "SafeScheduler";
+    @Reference
+    private ResourceResolverFactory resolverFactory;
+
+    private String jobName = "MySafeScheduler";
 
     @Activate
     protected void activate(Map<String, Object> config) {
+        // RULE 1: Use canRunConcurrently(false) to prevent pile-up
         ScheduleOptions opts = scheduler.EXPR("0 0 2 * * ?");
         opts.name(jobName);
-        opts.canRunConcurrently(false);  // Rule 1: No concurrent runs
+        opts.canRunConcurrently(false);
         scheduler.schedule(this, opts);
     }
 
     @Deactivate
     protected void deactivate() {
-        scheduler.unschedule(jobName);  // Rule 2: Always unschedule on deactivate
+        // RULE 2: Always unschedule in @Deactivate
+        scheduler.unschedule(jobName);
+        LOG.info("Scheduler '{}' unscheduled", jobName);
     }
 
     @Override
     public void run() {
-        // Rule 3: Never store ResourceResolver as class field
+        LOG.info("Scheduler starting...");
+
+        // RULE 3: NEVER store ResourceResolver as class field
+        // RULE 4: ALWAYS use try-with-resources for ResourceResolver
         Map<String, Object> params = Collections.singletonMap(
-            ResourceResolverFactory.SUBSERVICE, "scheduler-service"
+            ResourceResolverFactory.SUBSERVICE, "scheduler-reader"
         );
 
-        // Rule 4: Always use try-with-resources for ResourceResolver
         try (ResourceResolver resolver = resolverFactory.getServiceResourceResolver(params)) {
             doWork(resolver);
         } catch (LoginException e) {
-            LOG.error("Login failed", e);
+            LOG.error("Cannot get ResourceResolver", e);
+        } catch (Exception e) {
+            LOG.error("Scheduler execution failed", e);
         }
-        // Rule 5: Don't hold references to request-scoped objects
+        // resolver is auto-closed here
+
+        LOG.info("Scheduler finished.");
     }
 
     private void doWork(ResourceResolver resolver) {
-        // Actual business logic
+        // RULE 5: Don't hold references to request-scoped or session-scoped objects
+        // Only use the passed-in resolver within this method scope
+        Resource content = resolver.getResource("/content/mysite");
+        if (content != null) {
+            LOG.info("Content root exists: {}", content.getPath());
+        }
     }
 }
 ```
 
 ---
 
-## Q8. Difference Between Forward and Redirect in Servlets
-
-```java
-// FORWARD: Server-side, same request, URL unchanged
-// Use for: Internal page composition, error pages
-request.getRequestDispatcher("/content/error.html").forward(request, response);
-
-// REDIRECT: Client-side, new request, URL changes  
-// Use for: After form POST (PRG pattern), external URLs
-response.sendRedirect("/content/success.html");        // 302 (temporary)
-response.setStatus(301); response.setHeader("Location", "/new-url.html"); // 301 (permanent)
-```
-
-| Aspect | Forward | Redirect |
-|--------|---------|---------|
-| Request count | 1 | 2 |
-| URL changes | ❌ | ✅ |
-| Request object | Same | New |
-| Performance | Faster | Slower |
-| POST-Redirect-GET | Can cause re-submission | ✅ Prevents re-submission |
-
----
-
-## Q9. What Is Service User Mapping?
-
-Service user mapping links an **OSGi bundle + subservice name** to a **JCR system user**.
-
-```json
-// OSGi Config: org.apache.sling.serviceusermapping.impl.ServiceUserMapperImpl.amended-mysite.cfg.json
-{
-    "user.mapping": [
-        "com.mysite.core:read-content=mysite-content-reader",
-        "com.mysite.core:write-dam=mysite-dam-writer"
-    ]
-}
-```
-
-Pattern: `bundle-symbolic-name:subservice-name=system-user-id`
-
-Usage in code:
-```java
-params.put(ResourceResolverFactory.SUBSERVICE, "read-content");
-```
-
----
-
-## Q10. How Does Replication Queue Work?
+## Q8. Replication Queue — Troubleshooting Guide
 
 ### Replication Flow
 ```
-Author JCR → Replication Agent → HTTP POST (binary/json) → Replication Servlet on Publish → Publish JCR
+Author Page Activation
+        ↓
+Replication Agent (configured in Tools → Deployment → Replication)
+        ↓
+HTTP POST to Publish: /bin/receive?sling:authRequestLogin=1
+        ↓
+Publish stores content in JCR
+        ↓
+Publish sends cache invalidation to Dispatcher
+        ↓
+Dispatcher clears cached HTML for that page
+        ↓
+Next request: fresh content served
 ```
 
 ### Replication Queue States
-| State | Meaning |
-|-------|---------|
-| **IDLE** | No pending items |
-| **RUNNING** | Actively processing |
-| **BLOCKED** | Queue paused (error) |
-| **QUEUED** | Items waiting to be sent |
 
-### Common Replication Issues + Fixes
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| Queue blocked | Publish instance down | Restart Publish, or retry queue |
-| Agent 401 error | Wrong credentials | Update transport user in replication agent |
-| Content not appearing | Dispatcher cache stale | Flush Dispatcher cache manually |
-| Large content slow | Binary content | Use Binary-less replication + Shared Datastore |
+| State | Meaning | Action |
+|-------|---------|--------|
+| **IDLE** | No pending items — healthy | None needed |
+| **RUNNING** | Actively sending content | Normal |
+| **QUEUED** | Items waiting (publish busy) | Wait or check publish |
+| **BLOCKED** | Error — queue stopped | Check logs, fix error, retry |
 
-### Check Replication Queue
-- Author → Tools → Deployment → Replication → Agents on Author
-- Or: `/etc/replication/agents.author/publish.html`
+### Diagnosing a Blocked Queue
 
-### Reverse Replication
-Publish → Author direction. Used for:
-- User-generated content (UGC) → storing form submissions from Publish to Author
-- Statistics collection
+```
+Tools → Deployment → Replication → Agents on Author → Publish Agent → Edit
+
+TEST: Click "Test Connection"
+→ 200 OK → Connection fine — check content or auth
+→ 401 Unauthorized → Wrong transport user credentials
+→ 503 Connection Refused → Publish instance down
+→ Timeout → Network issue or publish overloaded
+
+Check Replication Queue:
+→ Author → Tools → Deployment → Distribution → Queue Details
+→ See failed items, retry or delete
+
+Check Error Log:
+→ /crx-quickstart/logs/error.log on Author
+→ Search for "ReplicationException"
+
+Common Fixes:
+1. Restart the blocked agent: Edit agent → Clear queue → Test Connection
+2. Check Publish is running: curl -I http://publish:4503/content/mysite/home.html
+3. Check transport user credentials in the agent settings
+4. Check Dispatcher is not blocking /bin/receive
+```
 
 ---
 
-## 💡 Quick-Fire Q&A Reference
+## 💡 Quick-Fire Q&A — Memorize These
 
-| Question | Quick Answer |
-|----------|-------------|
-| What port is AEM Author? | `4502` |
-| What port is AEM Publish? | `4503` |
-| Where are OSGi configs stored? | `/apps/.../osgiconfig/config/` (AEMaaCS) |
-| What is Oak? | Apache's JCR implementation (content repo) |
-| What is Sling? | URL → JCR resource resolution framework |
-| What is Felix? | Apache's OSGi container |
-| What is the AEM project archetype? | Maven archetype for AEM project structure |
-| What is the `cq:Page` node type? | JCR node type for AEM pages |
-| What is `jcr:content`? | Child node of cq:Page storing page properties |
-| What does "activation" mean? | Publishing content from Author → Publish |
-| What is `nt:unstructured`? | Generic JCR node type (for component content) |
-| What is `sling:Folder`? | JCR node type for folder-like nodes |
-| What is a Sling Resource? | Abstraction over a JCR node with URL context |
-| What is a ValueMap? | Type-safe map of JCR properties |
+| Question | Answer |
+|----------|--------|
+| Default Author port? | 4502 |
+| Default Publish port? | 4503 |
+| Where are components stored? | `/apps/<site>/components/` |
+| Where is authored content? | `/content/` |
+| Where are editable templates? | `/conf/<site>/settings/wcm/templates/` |
+| Where are OSGi configs? | `/apps/<site>/osgiconfig/config*/` |
+| Where are system users? | `/home/users/system/` |
+| What is Oak? | JCR implementation (Apache Jackrabbit Oak) |
+| What is Felix? | OSGi container (Apache Felix) |
+| What is Sling? | REST web framework for URL→JCR mapping |
+| What is a ValueMap? | Type-safe map of JCR node properties |
+| What is nt:unstructured? | Generic node type for component content |
+| What is cq:Page? | Node type for AEM pages |
+| What is jcr:content? | Child node storing page properties |
+| What does "activation" mean? | Publishing content from Author to Publish |
+| What is AEM Cloud immutable? | Code layer can't be changed post-deployment |
+| What is @PostConstruct for? | Runs after all injections — for initialization |
+| When does @Activate run? | Once when OSGi bundle/component starts |
+| When does @Deactivate run? | When bundle stops — release resources here! |
+| What does allowProxy do? | Allows clientlibs to be served via /etc.clientlibs/ |
+
+---
+
+## 🎯 Power Phrases for Your Interview
+
+Use these to sound like a senior developer:
+
+- *"I always use `DefaultInjectionStrategy.OPTIONAL` to avoid null injection failures silently crashing the model..."*
+- *"For service users, I follow the principle of least privilege — each subservice gets only the specific JCR paths it needs..."*
+- *"In AEM as a Cloud Service, the immutable architecture means all code changes must go through Cloud Manager pipeline — there's no Package Manager in production..."*
+- *"I prefer resource-type servlet registration over path-based for better security and content-level permission inheritance..."*
+- *"When extending Core Components, I use `@Self @Via(type = ResourceSuperType.class)` to delegate to the core model and add only my custom properties..."*
+- *"In `@Deactivate`, I always close HTTP clients, cancel scheduled jobs, and clear caches to prevent memory leaks..."*
+- *"For OSGi configuration, I store configs in run-mode specific folders — `config.author.prod` for author production, `config.publish` for all publish instances..."*
+- *"The Dispatcher is critical for performance — it caches rendered HTML, so AEM only renders a page once until the cache is invalidated by a publish event..."*

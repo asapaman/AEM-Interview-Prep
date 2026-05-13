@@ -1,135 +1,278 @@
 # Day 4 — Editable Templates
-**Difficulty:** Hard | **4 YOE Focus**
+**Target:** 2–4 YOE | **Versions:** AEM 6.5 & Cloud Service
 
 ---
 
-## 📖 Topic Explanation
+## 🌟 What Are Editable Templates?
 
-Editable Templates (introduced in AEM 6.2) allow template authors to create and manage templates directly in AEM — without developer involvement. They replaced Static Templates.
+Editable Templates (introduced in AEM 6.2, standard from 6.3+) allow **template authors** — not developers — to create and manage page templates directly in the AEM UI without writing a single line of code.
 
-### Where They Live
-- Template definitions: `/conf/<site>/settings/wcm/templates/`
-- Template policies: `/conf/<site>/settings/wcm/policies/`
+### The Problem They Solve
 
-### Template Structure in JCR
+Before Editable Templates, every template was hard-coded by developers. Business teams had to raise tickets to developers to:
+- Create a new landing page template
+- Change which components are allowed on a page
+- Lock/unlock certain page sections
+
+With Editable Templates, template authors can:
+- Create new page templates from scratch in the AEM Template Editor
+- Decide which components are allowed and where
+- Lock structural elements (header/footer) that authors can't touch
+- Set content policies (e.g., "only allow 2-column layout on Hero")
+
+---
+
+## 📁 Where Templates Live
+
 ```
-/conf/mysite/settings/wcm/templates/my-page-template/
-  ├── jcr:content                    ← Template metadata
-  │     ├── jcr:title = "My Page"
-  │     ├── sling:resourceType = "wcm/core/components/editable-template"
-  │     └── cq:deviceGroups = [...]
-  ├── structure/                     ← Locked/structural content
-  │     └── jcr:content/
-  │           └── root/              ← Layout container
-  │                 └── header/      ← Fixed (locked) components
-  ├── initial/                       ← Default content for new pages
-  │     └── jcr:content/
-  └── policies/                      ← Policy assignments
-        └── jcr:content/
+/conf/                                    ← Configuration root
+  └── mysite/                             ← Site-specific config
+        └── settings/
+              └── wcm/
+                    ├── templates/        ← All editable templates
+                    │     ├── homepage/
+                    │     ├── article-page/
+                    │     └── landing-page/
+                    └── policies/         ← Content policies
+                          └── mysite/
+                                └── components/
+                                      └── content/
+                                            └── hero/
+                                                  └── policy_1234/
+```
+
+### Important: `/conf` vs `/apps`
+
+| Location | Type | Mutable? |
+|----------|------|---------|
+| `/conf/mysite/settings/wcm/templates/` | Editable Templates | ✅ Yes (modified by template authors) |
+| `/apps/mysite/templates/` | Static Templates (legacy) | ❌ Only via package deployment |
+
+---
+
+## 🏗️ Three Layers of an Editable Template
+
+This is the core concept — templates have three distinct layers:
+
+### Layer 1: Structure
+
+**Who manages it:** Template authors / Developers
+**What it is:** Fixed components that appear on EVERY page using this template. Authors CANNOT move, edit, or delete these.
+
+```
+/conf/mysite/settings/wcm/templates/homepage/structure/
+  └── jcr:content/                        [cq:PageContent]
+        └── root/                         [wcm/foundation/components/responsivegrid]
+              ├── header/                 ← LOCKED — Header appears on all pages
+              │     sling:resourceType = "mysite/components/structure/header"
+              │     editable = false     ← Authors CANNOT edit this
+              └── footer/                 ← LOCKED
+                    sling:resourceType = "mysite/components/structure/footer"
+```
+
+**In the Template Editor:** Components in the Structure layer have a **padlock icon**. Template authors can lock/unlock individual components.
+
+### Layer 2: Initial Content
+
+**Who manages it:** Template authors
+**What it is:** Default content that is COPIED to new pages when they are created from this template. Unlike Structure, authors CAN edit, move, or delete initial content after page creation.
+
+```
+/conf/mysite/settings/wcm/templates/homepage/initial/
+  └── jcr:content/
+        └── root/
+              └── hero/                  ← Default hero content
+                    jcr:title = "Welcome to Our Site"
+                    subtitle = "Discover amazing products"
+```
+
+**Analogy:** Structure = permanent wallpaper. Initial Content = furniture that comes with the apartment — you can rearrange or replace it.
+
+### Layer 3: Policies (Formerly "Design")
+
+**Who manages it:** Template authors
+**What it is:** Configuration for components — which components are allowed, what style options they have, default settings. Stored in `/conf/mysite/settings/wcm/policies/`.
+
+```
+/conf/mysite/settings/wcm/policies/mysite/components/
+  └── content/
+        └── responsivegrid/
+              └── policy_abc123/
+                    allowedComponents/
+                      ├── mysite/components/content/hero      → ✅ allowed
+                      ├── mysite/components/content/text      → ✅ allowed
+                      ├── mysite/components/content/video     → ❌ not listed = not allowed
 ```
 
 ---
 
-## 🔑 Key Concepts
+## 📝 Template Definition — .content.xml
 
-### Structure vs Initial Content vs Policies
-
-| Section | Purpose | Editable by Author? |
-|---------|---------|-------------------|
-| **Structure** | Fixed layout, locked components (header/footer) | ❌ No |
-| **Initial** | Default content copied to new pages | ✅ Only at page creation |
-| **Policies** | Which components are allowed, style settings | Template authors only |
-
-### Template Status
-- **Draft** → Being created, can't be used for pages
-- **Enabled** → Active, can be used to create pages
-- **Disabled** → Archived, existing pages use it but no new pages
-
----
-
-## 🔧 Creating a Template — Key Steps
-
-1. Navigate to **Tools → General → Templates → `<site>`**
-2. Click **Create** → Select template type (Page template)
-3. Define **Structure**: Add locked components (header, footer, nav)
-4. Define **Initial content**: Pre-populate editable areas
-5. Set **Policies**: Allow specific components in layout containers
-6. **Enable** the template
-7. Configure **Allowed Templates** on the site root page (`cq:allowedTemplates`)
-
-### Template Path Configuration
 ```xml
-<!-- In page component's .content.xml or via policy -->
-<cq:allowedTemplates>
-  <path>/conf/mysite/settings/wcm/templates/.*</path>
-</cq:allowedTemplates>
+<?xml version="1.0" encoding="UTF-8"?>
+<jcr:root
+    xmlns:sling="http://sling.apache.org/jcr/sling/1.0"
+    xmlns:cq="http://www.day.com/jcr/cq/1.0"
+    xmlns:jcr="http://www.jcp.org/jcr/1.0"
+
+    jcr:primaryType="cq:Template"
+    jcr:title="My Site - Homepage"
+    jcr:description="Full-width homepage template"
+
+    <!-- Controls where this template CAN be used -->
+    allowedPaths="[/content/mysite(/.*)?,/content/mysite]"
+
+    <!-- Which templates can be child pages of pages using this template -->
+    allowedChildren="[/conf/mysite/settings/wcm/templates/article-page]"
+
+    <!-- Which template can be the parent -->
+    allowedParents="[/conf/mysite/settings/wcm/templates/.*]"
+
+    ranking="{Long}1"    <!-- Lower number = appears first in template picker -->
+    status="enabled"/>   <!-- enabled | disabled -->
 ```
 
 ---
 
-## 📐 Template Policies
+## 🔧 Template Type (The Template's Template!)
 
-Policies define:
-- Which **components** can be added to a container
-- **Style system** classes available for a component
-- Component-specific **design settings** (replacing legacy design_dialog)
+Every template must be based on a **Template Type**. Template Types define:
+- The page component used to render pages (e.g., `mysite/components/page/mysite-page`)
+- Available edit capabilities
+- Default structure
 
-Policy assignment in template → `/conf/.../policies/jcr:content/root`:
+```
+/conf/mysite/settings/wcm/template-types/
+  └── mysite-page/
+        ├── jcr:content/               ← Template Type config
+        │     └── sling:resourceType = "mysite/components/page/mysite-page"
+        └── structure/
+              └── jcr:content/
+                    └── root/          ← Default layout grid
+```
+
+**In practice:** Create Template Types once → developers. Create Templates daily → template authors.
+
+---
+
+## 💡 Creating a Template Programmatically (ContentPolicyManager)
+
+```java
+import com.day.cq.wcm.api.policies.ContentPolicy;
+import com.day.cq.wcm.api.policies.ContentPolicyManager;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+
+// Reading a content policy in a Sling Model
+@OSGiService
+private ContentPolicyManager policyManager;
+
+@ScriptVariable
+private Resource resource;
+
+@PostConstruct
+protected void init() {
+    // Get the policy for the current resource
+    ContentPolicy policy = policyManager.getPolicy(resource);
+    if (policy != null) {
+        // Read policy properties
+        ValueMap policyProps = policy.getProperties();
+        String allowedHeadingLevels = policyProps.get("headingLevels", "h1,h2,h3");
+        boolean showDate = policyProps.get("showDate", false);
+    }
+}
+```
+
+---
+
+## ✅ Template Allowed Components — Configuration
+
+In the Template Editor:
+1. Open template → Structure/Initial layer
+2. Click a container (like the main parsys/grid)
+3. Click "Policy" icon
+4. Select or create a policy
+5. Under "Allowed Components", check which component groups are allowed
+
+This creates a policy in `/conf/mysite/settings/wcm/policies/` with:
 ```xml
-<root jcr:primaryType="nt:unstructured"
-      cq:policy="/conf/mysite/settings/wcm/policies/mysite/components/core/wcm/components/parsys/default"/>
+<allowedComponents jcr:primaryType="nt:unstructured">
+    <mysite_content
+        jcr:primaryType="nt:unstructured"
+        components="[
+            mysite/components/content/hero,
+            mysite/components/content/text,
+            mysite/components/content/image,
+            mysite/components/content/card-grid
+        ]"/>
+</allowedComponents>
 ```
 
 ---
 
-## ❓ Interview Questions & Answers
+## ☁️ AEM 6.5 vs Cloud — Template Differences
 
-**Q1. What is the difference between Static Templates and Editable Templates?**
-> | Aspect | Static Templates | Editable Templates |
-> |--------|-----------------|-------------------|
-> | Location | `/apps/.../templates/` | `/conf/.../settings/wcm/templates/` |
-> | Management | Developer-only | Template authors |
-> | Policies | design_dialog | Content Policies |
-> | Flexibility | Low | High |
-> | Best Practice | Legacy | Current standard |
+| Aspect | AEM 6.5 | AEM Cloud Service |
+|--------|---------|-----------------|
+| **Template storage** | `/conf/<site>/settings/wcm/templates/` | Same |
+| **Create via UI** | ✅ Yes — Template Editor | ✅ Yes |
+| **Deploy via package** | ✅ Yes | ✅ Yes |
+| **Template types** | `/conf/` or `/apps/` | `/apps/` preferred |
+| **Policies in package** | ✅ Deployable | ✅ Deployable |
+| **Classic templates** | ✅ Still work | ⚠️ Discouraged |
 
-**Q2. Explain Structure vs Initial Content in Editable Templates.**
-> - **Structure**: Components locked for all pages (header, footer). Authors CANNOT edit or delete them. Content is inherited from the template.
-> - **Initial Content**: Default editable content. When a new page is created from the template, this content is **copied** to the page. Authors can freely edit it afterward.
+---
 
-**Q3. How do template policies work?**
-> Policies are stored in `/conf/.../policies/` and referenced from template structure nodes. They define: allowed components in a layout container, allowed style system classes, and component-specific configuration. Multiple templates can share the same policy.
+## ❓ Interview Questions & Detailed Answers
 
-**Q4. How do you restrict which templates are available when creating a page?**
-> Set `cq:allowedTemplates` property on the parent page node with a list of regex patterns for allowed template paths. E.g., `/conf/mysite/settings/wcm/templates/landing-.*` allows only landing page templates.
+**Q1. What is an Editable Template and how does it differ from a Static Template?**
 
-**Q5. What is a Responsive Grid / Layout Container?**
-> The Layout Container (`wcm/foundation/components/responsivegrid`) is the core component that enables drag-and-drop of components in the Editor. Its policy controls allowed components. The Responsive Grid enables breakpoint-based column layouts for responsive pages.
+> **Answer:** An Editable Template is a modern AEM template (AEM 6.2+) managed by template authors in the AEM UI at `/conf/<site>/settings/wcm/templates/`. It has three layers: Structure (fixed, locked), Initial Content (default, editable by page authors), and Policies (component restrictions). Static templates are developer-created XML files in `/apps/<site>/templates/` with a fixed structure that cannot be changed without code deployment. Editable Templates give business teams control over template management without developer involvement.
 
-**Q6. How do you troubleshoot a template that isn't showing up when creating a page?**
-> Check:
-> 1. Template status → must be **Enabled**
-> 2. `cq:allowedTemplates` on parent page matches template path
-> 3. User has permissions to use the template (`crx:replicate`, `jcr:read` on template)
-> 4. Template type exists and is valid
+**Q2. What is the difference between the Structure layer and the Initial Content layer?**
+
+> **Answer:** The Structure layer contains components that are permanent and locked — they appear on every page using the template and page authors cannot edit, move, or delete them (header, footer, navigation). The Initial Content layer contains components that are COPIED to new pages when they are created — authors CAN edit, move, or delete this content after page creation (e.g., default hero text that each author can customize).
+
+**Q3. What is a Content Policy and why is it preferred over cq:design_dialog?**
+
+> **Answer:** A Content Policy stores configuration for a component that applies globally within a template's scope (e.g., allowed heading levels, image crop ratios). Unlike `cq:design_dialog` (which required entering Design mode, a separate UI), Content Policies are configured in the Template Editor's policy panel — a more intuitive, integrated authoring experience. Policies are also stored in `/conf/` making them part of the content lifecycle, not the code lifecycle. They're the standard from AEM 6.3+ and required for AEM Style System.
+
+**Q4. What is a Template Type?**
+
+> **Answer:** A Template Type is the "template for templates" — it defines which page component renders pages created from templates of this type. It also provides a starting structure. You typically create one Template Type per page component type (standard page, landing page, microsite page). Template authors then create multiple templates from the same Template Type, each with different Structure/Initial Content configurations.
+
+**Q5. How do you restrict which templates can be used under a specific page in the content tree?**
+
+> **Answer:** Use the `allowedPaths` property in the template's `.content.xml`. For example, `allowedPaths="[/content/mysite/blog(/.*)?,/content/mysite/blog]"` restricts this template to only be selectable when creating pages under `/content/mysite/blog/`. Also use `allowedParents` (which parent templates' pages can use this template) and `allowedChildren` (what child templates pages using this template can have).
+
+**Q6. Where are Content Policies stored, and can they be deployed via package?**
+
+> **Answer:** Yes — Content Policies are stored in `/conf/<site>/settings/wcm/policies/` which is part of JCR content. They can be exported via Package Manager and deployed to other environments. In cloud environments, policies authored by template authors must be extracted into a content package (ui.content) and deployed via Cloud Manager pipeline to ensure consistency across dev/stage/prod.
 
 ---
 
 ## ✅ Best Practices
 
-- Always use **Editable Templates** — never use Static Templates for new projects
-- Lock **structural components** (header/nav/footer) in the structure layer
-- Create **separate templates** for different page types (landing, article, home)
-- Use **policies** to restrict components per container — don't allow ALL components everywhere
-- Use `/conf/<site>/` for all template/policy storage — never `/etc/` (deprecated)
-- Share policies across templates for consistency
+1. **Always use Editable Templates** for new projects — never Static Templates
+2. **Create Template Types** for each distinct page layout pattern
+3. **Lock structural components** (header, footer) in the Structure layer so authors can't accidentally delete them
+4. **Use Content Policies** to restrict allowed components — don't rely on authors knowing which to use
+5. **Name templates clearly** — "Blog Article Page" is better than "template-v2"
+6. **Export policies with content packages** — policies should be version-controlled
+7. **Set `ranking`** on templates — control the order they appear in the template picker
+8. **Use `status="disabled"`** to hide templates that are WIP or deprecated
 
 ---
 
-## 🛠️ Hands-on Task
+## 🛠️ Hands-on Practice
 
-Create an editable template:
-1. Page template for "Article Page"
-2. Lock header and footer in Structure
-3. Allow only Text, Image, and Video components in main content area via Policy
-4. Set initial content with a placeholder title
+1. In the AEM Template Editor (`/libs/wcm/core/content/sites/templates.html/conf/mysite`):
+   - Create a Template Type with your page component
+   - Create a template with a locked Header and Footer in Structure layer
+   - Add initial content (default hero text) in Initial layer
+   - Configure a policy for the main container allowing only Hero + Text + Image
+
+2. Create a page using your template and verify:
+   - Header/footer cannot be edited
+   - Initial content IS editable
+   - Only allowed components appear in the component browser
