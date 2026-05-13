@@ -58,6 +58,7 @@ It is specifically tailored for developers with 2-4 years of experience, balanci
 *   [Day 35: Groovy Console](Day35_Groovy_Console.md)
 *   [Day 36: Additional Important Questions](Day36_Additional_Important_Questions.md)
 *   [Day 37: Rapid-Fire Mock Interview QA](Day37_Mock_Interview_QA.md)
+*   [Day 38: 50 Enterprise Architecture Scenarios](Day38_Scenario_Based_Interview.md)
 
 ---
 
